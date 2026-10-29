@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"tokgo/internal/app"
+	"tokgo/internal/ui"
 )
 
 var (
@@ -27,25 +31,32 @@ var (
 	valueStyle  = lipgloss.NewStyle().Foreground(bodyCol)
 	ghostStyle  = lipgloss.NewStyle().Foreground(dimCol)
 	cyanStyle   = lipgloss.NewStyle().Foreground(cyan).Bold(true)
+	lookupStyle = lipgloss.NewStyle().Foreground(cyan)
+	recStyle    = lipgloss.NewStyle().Foreground(accent).Bold(true)
+	warnStyle   = lipgloss.NewStyle().Foreground(warnCol)
+	okStyle     = lipgloss.NewStyle().Foreground(okCol).Bold(true)
+	badStyle    = lipgloss.NewStyle().Foreground(badCol).Bold(true)
 	chipOn      = lipgloss.NewStyle().Foreground(lipgloss.Color("#111111")).Background(cyan).Bold(true).Padding(0, 1)
 	chipOff     = lipgloss.NewStyle().Foreground(dimCol).Padding(0, 1)
 	startStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#111111")).Background(accent).Bold(true).Padding(0, 1)
 	startHotSty = lipgloss.NewStyle().Foreground(lipgloss.Color("#111111")).Background(accent).Bold(true).Padding(0, 1).Underline(true)
 	hintStyle   = lipgloss.NewStyle().Foreground(dimCol)
 	errStyle    = lipgloss.NewStyle().Foreground(badCol)
-	okStyle     = lipgloss.NewStyle().Foreground(okCol).Bold(true)
-	badStyle    = lipgloss.NewStyle().Foreground(badCol).Bold(true)
 )
+
+// setupKeys is the one hint line the setup screen shows twice: body and footer.
+const setupKeys = "tab next · ←/→ mode · enter start · esc quit"
+
+// phaseWidth is the phase column. The words are cue words, not Phase.String().
+const phaseWidth = 6
 
 // View renders the active screen.
 func (m *Model) View() string {
 	switch m.screen {
-	case screenRunning:
-		return m.runningView()
-	case screenDone:
-		return m.doneView()
+	case screenMonitor, screenDone:
+		return m.monitorView()
 	default:
-		return m.formView()
+		return m.setupView()
 	}
 }
 
@@ -56,8 +67,20 @@ func (m *Model) size() (int, int) {
 	return m.width, m.height
 }
 
+// clock is the run clock, frozen once the run returned.
+func (m *Model) clock() time.Duration {
+	end := m.now
+	if !m.ended.IsZero() {
+		end = m.ended
+	}
+	if end.Before(m.started) {
+		return 0
+	}
+	return end.Sub(m.started)
+}
+
 func (m *Model) header(right string, w int) string {
-	left := titleStyle.Render("tokgo") + versionSty.Render(" "+m.version+" · tui")
+	left := titleStyle.Render("tokgo") + versionSty.Render(" "+m.version+" · monitor")
 	gap := w - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
@@ -69,47 +92,50 @@ func rule(w int) string {
 	return ruleStyle.Render(strings.Repeat("─", max(w, 1)))
 }
 
-func (m *Model) formView() string {
+// frame wraps a body into exactly h lines: header, rule, h-3 body lines, footer.
+func (m *Model) frame(head, foot string, body []string) string {
+	w, h := m.size()
+	lines := make([]string, 0, max(h, 1))
+	lines = append(lines, cut(head, w), rule(w))
+	for i := 0; i < h-3 && i < len(body); i++ {
+		lines = append(lines, cut(body[i], w))
+	}
+	for len(lines) < h-1 {
+		lines = append(lines, "")
+	}
+	lines = append(lines, cut(foot, w))
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) setupView() string {
 	w, _ := m.size()
-	cw := max(w-4, 20)
-	lines := []string{
-		m.header(valueStyle.Render("setup"), cw),
-		rule(cw),
+	content := max(w-4, 8)
+
+	body := []string{
 		"",
 		m.modeRow(),
 		m.fieldLine(0),
+		strings.Repeat(" ", 11) + m.preview(content-11),
 		m.fieldLine(1),
 		m.fieldLine(2),
 		m.fieldLine(3),
+		m.fieldLine(4),
 		"",
+		m.toggleLine(),
+		"",
+		m.startLine(),
 	}
-
-	toggle := "[ ]"
-	if m.upload {
-		toggle = "[x]"
-	}
-	toggleLine := toggle + " upload to Telegram after each recording"
-	if m.focus == fieldTelegram {
-		lines = append(lines, labelHot.Render("Telegram")+cyanStyle.Render(toggleLine))
-	} else {
-		lines = append(lines, labelStyle.Render("Telegram")+valueStyle.Render(toggleLine))
-	}
-
-	lines = append(lines, "")
-	if m.focus == fieldStart {
-		lines = append(lines, labelStyle.Render("")+startHotSty.Render("▸ Start"))
-	} else {
-		lines = append(lines, labelStyle.Render("")+startStyle.Render("▸ Start"))
-	}
-
 	if m.err != nil {
-		lines = append(lines, "", errStyle.Render(m.err.Error()))
+		body = append(body, "", errStyle.Render(m.err.Error()))
 	}
-
-	lines = append(lines, "", hintStyle.Render(
-		"tab next · shift+tab back · ←/→ mode · space toggle · enter start · esc quit"))
-
-	return lipgloss.NewStyle().Padding(0, 2).Render(strings.Join(lines, "\n"))
+	body = append(body, "", hintStyle.Render(setupKeys))
+	for i, line := range body {
+		body[i] = "  " + cut(line, content)
+	}
+	return m.frame(m.header(valueStyle.Render("setup"), w), hintStyle.Render(setupKeys), body)
 }
 
 func (m *Model) modeRow() string {
@@ -133,8 +159,8 @@ func (m *Model) modeRow() string {
 }
 
 func (m *Model) fieldLine(i int) string {
-	labels := [4]string{"Target", "Duration", "Output", "Proxy"}
-	focus := fieldTarget + i
+	labels := [5]string{"Targets", "Duration", "Interval", "Output", "Proxy"}
+	focus := fieldTargets + i
 	label := labelStyle.Render(labels[i])
 	if m.focus == focus {
 		label = labelHot.Render(labels[i])
@@ -150,106 +176,333 @@ func (m *Model) fieldLine(i int) string {
 	return label + " " + value
 }
 
-func (m *Model) runningView() string {
-	w, h := m.size()
-	state := "recording"
-	if m.finishing {
-		state = "finishing, keep the terminal open"
-	}
-	head := m.header(cyanStyle.Render(state), w)
-	meta := fmt.Sprintf("  %s · %s · %s%s",
-		valueStyle.Render(m.targetLabel()),
-		hintStyle.Render(modeNames[m.mode]),
-		hintStyle.Render("elapsed "),
-		valueStyle.Render(elapsed(m.now.Sub(m.started))))
-
-	sub := meta
-	if m.capSecs > 0 {
-		sub += hintStyle.Render(" / cap " + elapsed(time.Duration(m.capSecs)*time.Second))
-	}
-
-	lines := []string{head, rule(w), sub, ""}
-	lines = append(lines, m.logTail(h-8)...)
-	lines = append(lines, "", rule(w), hintStyle.Render("  ctrl+c finish and remux · press again to quit now"))
-	return strings.Join(lines, "\n")
-}
-
-func (m *Model) doneView() string {
-	w, _ := m.size()
-	lines := []string{m.header("", w), rule(w), ""}
-
+// preview names the targets the field will run, so a typo shows before start.
+func (m *Model) preview(width int) string {
+	raw := strings.TrimSpace(m.inputs[0].Value())
+	targets := splitTargets(raw)
+	var line string
 	switch {
-	case m.result == nil:
-		lines = append(lines, okStyle.Render("  ✓ finished ")+hintStyle.Render(elapsed(m.now.Sub(m.started))))
-	case errors.Is(m.result, context.Canceled):
-		lines = append(lines, warnSty("  ■ stopped ")+hintStyle.Render(elapsed(m.now.Sub(m.started))))
-	case m.finishing:
-		lines = append(lines, warnSty("  ■ stopped ")+hintStyle.Render(elapsed(m.now.Sub(m.started))))
+	case len(targets) == 0:
+		line = "no targets yet"
+	case len(targets) > 1:
+		labels := make([]string, len(targets))
+		for i, name := range targets {
+			labels[i] = "@" + name
+		}
+		line = fmt.Sprintf("%d targets: %s", len(targets), strings.Join(labels, " "))
+	case isRoomID(targets[0]):
+		line = "1 target: room " + targets[0]
+	case strings.Contains(targets[0], "tiktok.com"):
+		line = "1 target: " + targets[0]
 	default:
-		lines = append(lines, badStyle.Render("  ✗ "+m.result.Error()))
+		line = "1 target: @" + targets[0]
 	}
-
-	lines = append(lines, "")
-	lines = append(lines, m.logTail(10)...)
-	lines = append(lines, "", rule(w), hintStyle.Render("  r new run · q quit"))
-	return strings.Join(lines, "\n")
+	return ghostStyle.Render(clip(line, max(width, 1)))
 }
 
-func warnSty(s string) string {
-	return lipgloss.NewStyle().Foreground(warnCol).Bold(true).Render(s)
+func (m *Model) toggleLine() string {
+	toggle := "[ ]"
+	style := labelStyle
+	if m.upload {
+		toggle = "[x]"
+	}
+	if m.focus == fieldTelegram {
+		return labelHot.Render("Telegram") + " " + cyanStyle.Render(toggle+" upload after each recording")
+	}
+	return style.Render("Telegram") + " " + valueStyle.Render(toggle+" upload after each recording")
 }
 
-// logTail renders the last n log lines clipped to the terminal width.
-func (m *Model) logTail(n int) []string {
+func (m *Model) startLine() string {
+	label := labelStyle.Render("")
+	if m.focus == fieldStart {
+		return label + " " + startHotSty.Render("▸ Start")
+	}
+	return label + " " + startStyle.Render("▸ Start")
+}
+
+func (m *Model) monitorView() string {
+	w, h := m.size()
+	return m.frame(m.monitorHeader(w), m.monitorFooter(), m.monitorBody(w, h-3))
+}
+
+func (m *Model) monitorHeader(w int) string {
+	if m.screen == screenDone {
+		return m.header(m.outcome(), w)
+	}
+	recording := 0
+	for _, t := range m.targets {
+		if t.phase == app.PhaseRecording {
+			recording++
+		}
+	}
+	dot := ""
+	if recording > 0 {
+		dot = cyanStyle.Render("●") + " "
+	}
+	state := ""
+	if m.finishing {
+		state = warnStyle.Render("stopping") + hintStyle.Render(" · ")
+	}
+	summary := fmt.Sprintf("%d recording · %d targets · %s", recording, len(m.targets), ui.Clock(m.clock()))
+	return m.header(state+dot+hintStyle.Render(summary), w)
+}
+
+func (m *Model) outcome() string {
+	clock := hintStyle.Render(" · " + ui.Clock(m.clock()))
+	switch {
+	case errors.Is(m.result, context.Canceled), m.finishing:
+		return warnStyle.Render("stopped") + clock
+	case m.result != nil:
+		return badStyle.Render("failed") + clock
+	default:
+		return okStyle.Render("finished") + clock
+	}
+}
+
+func (m *Model) monitorFooter() string {
+	if m.prompting {
+		return m.prompt.View()
+	}
+	if m.notice != "" && m.now.Sub(m.noticeAt) < 3*time.Second {
+		return errStyle.Render(m.notice)
+	}
+	if m.screen == screenDone {
+		return hintStyle.Render("r new run · q quit")
+	}
+	if m.finishing {
+		return hintStyle.Render("stopping · ctrl+c again to quit")
+	}
+	return hintStyle.Render("↑↓ select · a add · x drop · ctrl+c stop · q quit")
+}
+
+// monitorBody splits the width between the target list and the activity pane.
+// Under 72 columns the log pane is dropped rather than squeezed.
+func (m *Model) monitorBody(w, body int) []string {
+	body = max(body, 0)
+	if w < 72 {
+		return m.leftPane(w, body)
+	}
+	leftW := min(max(w*37/100, 36), 56)
+	rightW := w - leftW - 1
+	left := m.leftPane(leftW, body)
+	right := m.rightPane(rightW, body)
+	out := make([]string, body)
+	for i := range out {
+		var l, r string
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		out[i] = padRight(cut(l, leftW), leftW) + " " + cut(r, rightW)
+	}
+	return out
+}
+
+// leftPane is the target table plus the selected row's detail. The detail block
+// shrinks before the table does, and the table window follows the selection.
+func (m *Model) leftPane(w, body int) []string {
+	if body < 1 {
+		return nil
+	}
+	lines := []string{ghostStyle.Render("targets")}
+	detail := min(3, max(body-4, 0))
+	rows := body - 1 - detail
+	if rows < 1 {
+		rows, detail = 0, 0
+	}
+	start := 0
+	if m.sel >= rows && rows > 0 {
+		start = m.sel - rows + 1
+	}
+	start = min(max(start, 0), max(len(m.targets)-rows, 0))
+
+	nameW := max(w-(phaseWidth+20), 1)
+	for i := start; i < len(m.targets) && len(lines) < 1+rows; i++ {
+		lines = append(lines, m.rowLine(m.targets[i], i == m.sel, nameW))
+	}
+	lines = append(lines, m.detailLines(detail, w)...)
+	for len(lines) < body {
+		lines = append(lines, "")
+	}
+	return lines[:body]
+}
+
+// rowLine is marker, label, phase, timer, size in fixed columns, so the table
+// stays a table while names come and go.
+func (m *Model) rowLine(t target, selected bool, nameW int) string {
+	marker := " "
+	if selected {
+		marker = cyanStyle.Render("▸")
+	}
+	word, style := m.phaseCell(t)
+	size := ""
+	if t.bytes > 0 {
+		size = ui.Bytes(t.bytes)
+	}
+	return marker + " " +
+		padRight(clip(t.label, nameW), nameW) + " " +
+		padRight(style.Render(word), phaseWidth) + " " +
+		padLeft(m.timer(t), 7) + " " +
+		padLeft(size, 8)
+}
+
+// phaseCell gives the short cue word and its colour. A run being cancelled
+// reads stop on every row that has not reached a terminal phase yet.
+func (m *Model) phaseCell(t target) (string, lipgloss.Style) {
+	if m.finishing && t.phase.Active() {
+		return "stop", warnStyle
+	}
+	switch t.phase {
+	case app.PhaseResolving:
+		return "lookup", lookupStyle
+	case app.PhaseWaiting:
+		return "wait", ghostStyle
+	case app.PhaseLive:
+		return "live", cyanStyle
+	case app.PhaseRecording:
+		return "REC", recStyle
+	case app.PhaseConverting:
+		return "remux", warnStyle
+	case app.PhaseDone:
+		return "done", okStyle
+	case app.PhaseStopped:
+		return "stop", warnStyle
+	case app.PhaseFailed:
+		return "fail", badStyle
+	default:
+		return "queue", ghostStyle
+	}
+}
+
+// timer counts the current phase, the poll countdown while waiting, and the
+// total active time once the target is terminal. The terminal row keeps the
+// total rather than the last phase, so a recording that ended in a one second
+// remux still reads as its real length.
+func (m *Model) timer(t target) string {
+	now := m.now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	switch {
+	case t.phase == app.PhaseWaiting:
+		left := m.interval - now.Sub(t.since)
+		if left < 0 {
+			left = 0
+		}
+		return "-" + ui.Clock(left)
+	case t.phase == app.PhaseDone, t.phase == app.PhaseStopped, t.phase == app.PhaseFailed:
+		return ui.Clock(t.active)
+	default:
+		return ui.Clock(now.Sub(t.since))
+	}
+}
+
+func (m *Model) detailLines(n, w int) []string {
+	t := m.selected()
+	if t == nil || n <= 0 {
+		return nil
+	}
+	first := t.label
+	if t.room != "" {
+		first += " · room " + t.room
+	}
+	out := []string{valueStyle.Render(clip(first, w))}
+	if n > 1 && t.file != "" {
+		out = append(out, ghostStyle.Render(clip(filepath.Base(t.file), w)))
+	}
+	if n > 2 && t.detail != "" && t.detail != t.room {
+		out = append(out, hintStyle.Render(clip(t.detail, w)))
+	}
+	return out
+}
+
+func (m *Model) rightPane(w, body int) []string {
+	if body < 1 {
+		return nil
+	}
+	lines := []string{ghostStyle.Render("activity")}
+	return append(lines, m.logTail(body-1, w)...)
+}
+
+// logTail renders the last n log lines clipped to the pane width.
+func (m *Model) logTail(n, width int) []string {
 	if n < 1 {
 		n = 1
 	}
-	w, _ := m.size()
-	width := max(w-6, 20)
 	tail := m.logs
 	if len(tail) > n {
 		tail = tail[len(tail)-n:]
 	}
-	out := make([]string, 0, len(tail))
+	out := make([]string, 0, n)
 	for _, line := range tail {
 		marker, style := markers(line.level)
-		text := lipgloss.NewStyle().MaxWidth(width).Render(line.text)
+		text := clip(line.text, max(width-4, 1))
 		out = append(out, "  "+style.Render(marker)+" "+text)
 	}
 	for len(out) < n {
 		out = append(out, "")
 	}
-	return out
+	return out[:n]
 }
 
 func markers(level string) (string, lipgloss.Style) {
 	switch level {
 	case "START":
-		return "▶", lipgloss.NewStyle().Foreground(cyan)
+		return "▶", lookupStyle
 	case "STOP":
-		return "■", lipgloss.NewStyle().Foreground(warnCol)
+		return "■", warnStyle
 	case "DONE":
 		return "✓", lipgloss.NewStyle().Foreground(okCol)
 	case "WARN":
-		return "!", lipgloss.NewStyle().Foreground(warnCol)
+		return "!", warnStyle
 	case "ERROR":
-		return "!", lipgloss.NewStyle().Foreground(badCol).Bold(true)
+		return "!", badStyle
 	case "DEBUG":
 		return "·", ghostStyle
 	default:
-		return "•", lipgloss.NewStyle().Foreground(cyan)
+		return "•", lookupStyle
 	}
 }
 
-func elapsed(d time.Duration) string {
-	if d < 0 {
-		d = 0
+// cut trims a rendered line to the terminal width. It is the last resort before
+// the line reaches the screen.
+func cut(s string, w int) string {
+	if w <= 0 {
+		return ""
 	}
-	total := int(d.Seconds())
-	h, rem := total/3600, total%3600
-	minutes, seconds := rem/60, rem%60
-	if h > 0 {
-		return fmt.Sprintf("%d:%02d:%02d", h, minutes, seconds)
+	if lipgloss.Width(s) <= w {
+		return s
 	}
-	return fmt.Sprintf("%02d:%02d", minutes, seconds)
+	return lipgloss.NewStyle().MaxWidth(w).Render(s)
+}
+
+// clip shortens plain text with an ellipsis, for the fixed table columns.
+func clip(s string, n int) string {
+	r := []rune(s)
+	if n <= 0 {
+		return ""
+	}
+	if len(r) <= n {
+		return s
+	}
+	if n == 1 {
+		return "…"
+	}
+	return string(r[:n-1]) + "…"
+}
+
+func padRight(s string, n int) string {
+	if d := n - lipgloss.Width(s); d > 0 {
+		return s + strings.Repeat(" ", d)
+	}
+	return s
+}
+
+func padLeft(s string, n int) string {
+	if d := n - lipgloss.Width(s); d > 0 {
+		return strings.Repeat(" ", d) + s
+	}
+	return s
 }
