@@ -75,6 +75,8 @@ var (
 	ErrNotRunning = errors.New("no run in progress")
 	// ErrUserRunning reports a target that this run already holds.
 	ErrUserRunning = errors.New("user is already a target")
+	// ErrURLRun reports a target added to a url run, which has exactly one.
+	ErrURLRun = errors.New("a url run has a single target")
 )
 
 // OnStatus installs the observer for per-target status updates. It is safe to
@@ -86,9 +88,14 @@ func (r *Runner) OnStatus(f func(Status)) {
 	r.mu.Unlock()
 }
 
-// AddUser starts one more target while Run is in flight.
+// AddUser starts one more target while Run is in flight. It applies only to
+// username runs: a url run resolves every target through its url, so it has
+// exactly one target by construction.
 func (r *Runner) AddUser(user string) error {
-	return r.launch(user, true)
+	if r.cfg.URL != "" {
+		return ErrURLRun
+	}
+	return r.launch(user)
 }
 
 // DropUser cancels one target's run without touching the others. It reports
@@ -116,12 +123,23 @@ func (r *Runner) supervise(ctx context.Context, users []string, work func(contex
 	r.idle = sync.NewCond(&r.mu)
 	r.tasks = make(map[string]context.CancelFunc)
 	r.errs = make(map[string]error)
-	r.multi = len(users) > 1
+	r.multi = false
+	r.registered = 0
 	r.fails = 0
 	r.mu.Unlock()
 
+	seen := make(map[string]struct{}, len(users))
 	for _, user := range users {
-		r.launch(user, false)
+		if _, dup := seen[user]; dup {
+			continue
+		}
+		seen[user] = struct{}{}
+		if err := r.launch(user); err != nil {
+			r.mu.Lock()
+			r.errs[user] = err
+			r.fails++
+			r.mu.Unlock()
+		}
 	}
 
 	r.mu.Lock()
@@ -157,9 +175,10 @@ func (r *Runner) supervise(ctx context.Context, users []string, work func(contex
 	return nil
 }
 
-// launch registers one target and starts its goroutine. join marks a target
-// added after the run started, which turns the run into the multi-target path.
-func (r *Runner) launch(user string, join bool) error {
+// launch registers one target and starts its goroutine. The registration count
+// is what turns the run multi, so a target added mid-run flips it once and a
+// target that never registered cannot.
+func (r *Runner) launch(user string) error {
 	r.mu.Lock()
 	if r.runCtx == nil {
 		r.mu.Unlock()
@@ -171,9 +190,8 @@ func (r *Runner) launch(user string, join bool) error {
 	}
 	ctx, cancel := context.WithCancel(r.runCtx)
 	r.tasks[user] = cancel
-	if join {
-		r.multi = true
-	}
+	r.registered++
+	r.multi = r.registered > 1
 	work, status := r.work, r.status
 	r.mu.Unlock()
 

@@ -34,10 +34,13 @@ type Runner struct {
 	runCtx context.Context
 	tasks  map[string]context.CancelFunc
 	errs   map[string]error // per-target result, for the single-target return path
-	multi  bool             // more than one target in this run
-	fails  int
-	status func(Status)
-	work   func(context.Context, string) (string, error) // the body the current run's targets execute
+	multi  bool             // more than one target registered in this run
+	// registered counts every successful launch, so a run only takes the
+	// multi-target path once a second target actually exists.
+	registered int
+	fails      int
+	status     func(Status)
+	work       func(context.Context, string) (string, error) // the body the current run's targets execute
 }
 
 // New wires a runner. The proxy, when set, is used for lookups only: pulling

@@ -203,6 +203,47 @@ func TestRecordDiscardsSegmentsFromASubThresholdCandidate(t *testing.T) {
 	assertOnlyRecording(t, dir, path)
 }
 
+// The bytes of a rejected candidate are deleted from disk, so they must leave
+// the reported total too. Otherwise the UI shows a size no surviving file has.
+func TestRecordReportsOnlySurvivingBytes(t *testing.T) {
+	short := bytes.Repeat([]byte("junk"), 25)
+	payload := streamBytes()
+	bodies := map[string]*bytes.Reader{
+		"url-short": bytes.NewReader(short),
+		"url-good":  bytes.NewReader(payload),
+	}
+	api := &fakeAPI{
+		urls: []string{"url-short", "url-good"},
+		open: func(_ context.Context, url string) (io.ReadCloser, error) {
+			return io.NopCloser(bodies[url]), nil
+		},
+	}
+	stub, _ := ffmpegStub(t, "")
+	var (
+		mu       sync.Mutex
+		progress []Progress
+	)
+	rec := New(api, Options{OutputDir: t.TempDir(), FFmpegPath: stub, Report: func(p Progress) {
+		mu.Lock()
+		progress = append(progress, p)
+		mu.Unlock()
+	}})
+
+	if _, err := collect(t, rec, context.Background()); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	mu.Lock()
+	got := append([]Progress(nil), progress...)
+	mu.Unlock()
+	final := got[len(got)-1]
+	if final.Stage != StageConverting {
+		t.Fatalf("last update = %+v, want the remux stage", final)
+	}
+	if final.Bytes != int64(len(payload)) {
+		t.Fatalf("final progress = %d bytes, want the %d that survived", final.Bytes, len(payload))
+	}
+}
+
 func TestRecordAllCandidatesEmpty(t *testing.T) {
 	dir := t.TempDir()
 	api := &fakeAPI{
@@ -343,6 +384,101 @@ func TestRecordingNameIsTheUserJoinedToTheStartTime(t *testing.T) {
 }
 
 var recordingName = regexp.MustCompile(`^(.+)=(\d{8}_\d{6})\.mp4$`)
+
+// Two recordings of the same user can start in the same second, and a second
+// tokgo can share the output directory. A base already on disk must not be
+// reused: the muxers would interleave into one .000.ts and the first finished
+// conversion would delete the segments the other still needs.
+func TestRecordMovesPastATakenBase(t *testing.T) {
+	payload := streamBytes()
+	stub, _ := ffmpegStub(t, "")
+	dir := t.TempDir()
+	now := time.Now()
+	taken := make(map[string]string)
+	for _, offset := range []time.Duration{-2 * time.Second, -time.Second, 0, time.Second, 2 * time.Second} {
+		stem := "user=" + now.Add(offset).Format("20060102_150405")
+		marker := filepath.Join(dir, stem+".000.ts")
+		if err := os.WriteFile(marker, []byte("other recording"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		taken[stem] = marker
+	}
+	api := &fakeAPI{
+		urls:  []string{"url-a"},
+		alive: runsOnce,
+		open: func(context.Context, string) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(payload)), nil
+		},
+	}
+	rec := New(api, Options{OutputDir: dir, FFmpegPath: stub})
+
+	path, err := collect(t, rec, context.Background())
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if _, reused := taken[strings.TrimSuffix(filepath.Base(path), ".mp4")]; reused {
+		t.Fatalf("Record reused the taken base: %q", path)
+	}
+	for stem, marker := range taken {
+		if got, err := os.ReadFile(marker); err != nil || string(got) != "other recording" {
+			t.Fatalf("marker %s = %q, %v, want the earlier recording untouched", stem, got, err)
+		}
+	}
+}
+
+// The same-user collision can happen concurrently, so the base claim must be
+// atomic rather than a stat that two callers can both pass.
+func TestConcurrentRecordCallsClaimDifferentBases(t *testing.T) {
+	payload := streamBytes()
+	stub, _ := ffmpegStub(t, "")
+	dir := t.TempDir()
+	logs := captureLogs(t)
+	newRec := func() *Recorder {
+		api := &fakeAPI{
+			urls:  []string{"url-a"},
+			alive: runsOnce,
+			open: func(context.Context, string) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(payload)), nil
+			},
+		}
+		return New(api, Options{OutputDir: dir, FFmpegPath: stub})
+	}
+
+	type outcome struct {
+		path string
+		err  error
+	}
+	start := make(chan struct{})
+	done := make(chan outcome, 2)
+	for _, rec := range []*Recorder{newRec(), newRec()} {
+		go func(rec *Recorder) {
+			<-start
+			path, err := rec.Record(context.Background(), "user", "room")
+			done <- outcome{path, err}
+		}(rec)
+	}
+	close(start)
+
+	paths := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		got := <-done
+		if got.err != nil {
+			t.Fatalf("Record: %v", got.err)
+		}
+		paths = append(paths, got.path)
+	}
+	if paths[0] == paths[1] {
+		t.Fatalf("both calls returned %q, want separate recordings", paths[0])
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("recording %q missing: %v", path, err)
+		}
+	}
+	if failed := countLogs(logs(), "conversion failed"); failed != 0 {
+		t.Fatalf("%d conversion failure(s) for concurrent same-user recordings: %q", failed, logs())
+	}
+}
 
 func TestRecordFallsBackToRawCaptureWhenMuxerFails(t *testing.T) {
 	payload := streamBytes()
