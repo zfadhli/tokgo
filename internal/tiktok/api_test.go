@@ -553,3 +553,58 @@ func TestContextCancellationIsHonoured(t *testing.T) {
 		t.Fatal("cancelled context should surface an error")
 	}
 }
+
+// TestRestrictedLiveIsCapturable walks the exact chain the recorder takes for a
+// login-restricted room: TikTok answers 4003110 for the room API, the live page
+// still leaks a CDN url, and that url serves media. A restricted live is only
+// usable if all three steps line up, so assert them together.
+func TestRestrictedLiveIsCapturable(t *testing.T) {
+	stream := strings.Repeat("flv-frame-", 2048)
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/webcast/room/check_alive/":
+			writeBody(w, `{"data":[{"alive":true}]}`)
+		case "/webcast/room/info/":
+			writeBody(w, infoRestricted)
+		case "/@creator/live":
+			// Point the scraped url back at this server: a restricted room's page
+			// advertises an absolute CDN host, and the test must stay offline.
+			cdn := "http://" + r.Host + "/live_or4.flv?sig=abc&amp;t=1"
+			writeBody(w, `<script>var p="`+cdn+`";</script>`)
+		case "/live_or4.flv":
+			writeBody(w, stream)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+	}))
+
+	ctx := t.Context()
+	alive, err := c.RoomAlive(ctx, "7123")
+	if err != nil {
+		t.Fatalf("RoomAlive: %v", err)
+	}
+	if !alive {
+		t.Fatal("a restricted room must report alive so the caller can try the fallback")
+	}
+
+	urls, err := c.LiveURLs(ctx, "7123", "creator")
+	if err != nil {
+		t.Fatalf("LiveURLs: %v", err)
+	}
+	if len(urls) != 1 || !strings.HasSuffix(urls[0], "/live_or4.flv?sig=abc&t=1") {
+		t.Fatalf("scraped urls = %v", urls)
+	}
+
+	body, err := c.OpenStream(ctx, urls[0])
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	defer body.Close()
+	got, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+	if string(got) != stream {
+		t.Fatalf("captured %d bytes, want %d", len(got), len(stream))
+	}
+}

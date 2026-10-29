@@ -2,20 +2,18 @@ package tiktok
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"time"
 )
 
 var chromeHeaders = map[string]string{
-	"User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.127 Safari/537.36",
+	"User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 	"Accept-Language":           "en-US",
 	"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,application/json,text/plain,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 	"Referer":                   "https://www.tiktok.com/",
 	"Origin":                    "https://www.tiktok.com",
-	"Sec-Ch-Ua":                 `"Not/A)Brand";v="8", "Chromium";v="126"`,
+	"Sec-Ch-Ua":                 `"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`,
 	"Sec-Ch-Ua-Mobile":          "?0",
 	"Sec-Ch-Ua-Platform":        `"Windows"`,
 	"Upgrade-Insecure-Requests": "1",
@@ -62,21 +60,6 @@ func (c *Client) Browser() *Client {
 	b := *c
 	b.hc = &http.Client{Jar: c.hc.Jar, Transport: newTransport("")}
 	return &b
-}
-
-func newTransport(proxy string) *http.Transport {
-	tr := &http.Transport{
-		DialContext:           (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
-		TLSHandshakeTimeout:   15 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-		ForceAttemptHTTP2:     true,
-	}
-	if proxy != "" {
-		if u, err := url.Parse(proxy); err == nil {
-			tr.Proxy = http.ProxyURL(u)
-		}
-	}
-	return tr
 }
 
 func (c *Client) get(ctx context.Context, rawURL string, noRedirect bool) (*http.Response, error) {

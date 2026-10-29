@@ -107,14 +107,37 @@ When TikTok answers `status_code 4003110` (WAF or region restriction) the
 recorder scrapes the public live page HTML for a direct `.flv`/`.m3u8` URL
 before giving up.
 
+## TLS impersonation and proxies
+
+TikTok's WAF fingerprints the TLS handshake, so every connection is made with a
+Chrome ClientHello via [utls](https://github.com/refraction-networking/utls)
+instead of Go's `crypto/tls`. Server-observed fingerprints:
+
+| Client                       | JA4                                      |
+| ---------------------------- | ---------------------------------------- |
+| Go `crypto/tls`              | `t13d1311h2_f57a46bbacb6_e7c285222651`   |
+| this tool (utls, Chrome 120) | `t13d1516h1_8daaf6152771_02713d6af862`   |
+
+The second value carries Chrome's cipher and extension hashes (`8daaf6152771`,
+`02713d6af862`). Three deliberate details:
+
+- The profile is pinned to `HelloChrome_120` rather than `HelloChrome_Auto`.
+  Auto tracks the newest Chrome, which sends post-quantum key shares that some
+  middleboxes drop, and it drifts away from the `User-Agent` silently. The
+  header set is Chrome 120 to match.
+- ALPN is narrowed to `http/1.1`. utls presets carry their own `h2, http/1.1`
+  list and ignore `Config.NextProtos`; left alone, a server would agree on `h2`
+  while Go's HTTP/1.1 transport talked past it. The reference tool forces
+  HTTP/1.1 for the same reason.
+- The proxy is tunnelled inside the dialer, with `Transport.Proxy` left nil.
+  `http.Transport` ignores `DialTLSContext` for proxied requests, so a proxied
+  run would otherwise silently fall back to Go's fingerprint. `-proxy` therefore
+  gets impersonation too, including `Basic` credentials in the `CONNECT`.
+
 ## Divergences from the Python original
 
 Deliberate, and each one is a decision rather than an omission:
 
-- **No TLS impersonation.** `curl_cffi` mimics Chrome's TLS fingerprint. Go's
-  standard library cannot, so requests carry Chrome's header set only. The
-  endpoints this tool uses do not currently require the fingerprint; a future
-  WAF change would be handled by the page-scrape fallback.
 - **Telegram uses the Bot API**, not MTProto. A user-account client would mean a
   multi-megabyte MTProto dependency and a session store; a bot token plus
   `sendDocument` covers the same need in ~90 lines.
@@ -130,17 +153,27 @@ Deliberate, and each one is a decision rather than an omission:
 - **`signed_url` is honoured.** The live tikrec response returns a `signed_url`
   (absolute); the Python code looks for `signed_path` and would build a broken
   URL. Both keys are accepted here.
+- **HTTP/1.1 only.** The reference also forces `http_version="v1"`; there is no
+  HTTP/2 path here.
 
 ## Tests
 
 ```bash
-go test ./...
+go test ./...          # offline: fake network, no ffmpeg, no TikTok
 go test -race ./...
+go test -tags live ./...   # real TikTok, real fingerprints, real proxy tunnel
 ```
 
 Unit tests cover the quality ordering, the CLI validation matrix, the recorder
-fallback and stop logic (with a fake network), ffmpeg argument construction, and
-the Telegram multipart request. No test touches the network.
+fallback and stop logic (with a fake network), ffmpeg argument construction, the
+Telegram multipart request, the `CONNECT` tunnel framing (including bytes a
+proxy sends in the same packet as its `200`), and a utls handshake against a Go
+TLS server. Offline tests never touch the network.
+
+The `live` tag adds four checks that only make sense against the real service:
+the JA4 fingerprint is Chrome's and not `crypto/tls`'s, a Chrome hello completes
+against `www.tiktok.com`, a request survives the hand-rolled `CONNECT` tunnel to
+TikTok, and the same signed room URL works through both TLS stacks.
 
 ## Verified against the live service
 
@@ -156,5 +189,22 @@ Recorded on 2026-10-29 against `@aljazeeraenglish` and `@tiktok`:
 - `-mode automatic`: records, then reports the wait before the next poll.
 - Multi-user: both users run concurrently, one live one not; the live one lands,
   the dead one is reported once with its `@name` prefix, exit status 1.
+- TLS impersonation: JA4 `t13d1516h1_8daaf6152771_02713d6af862` reported by
+  `tls.peet.ws`, against `t13d1311h2_f57a46bbacb6_e7c285222651` for `crypto/tls`;
+  `www.tiktok.com` negotiates `http/1.1` with that hello; a capture re-taken
+  through the new transport produced 3.4 MB / 14.2 s.
 - Error paths: not-live, invalid URL, mutually exclusive flags, and TikTok's WAF
   answer (`403` with an empty body) all report a single clear message.
+
+### Restricted lives
+
+A `4003110` answer (login or region restriction) is handled by scraping the
+public live page for a CDN url. Verified two ways:
+
+- `TestRestrictedLiveIsCapturable` walks the whole chain: `RoomAlive` reports a
+  restricted room alive, `LiveURLs` scrapes `..._or4.flv` out of the page, and
+  `OpenStream` returns the media bytes. Deterministic, offline.
+- Against the live service, this IP is not WAF-flagged (both `crypto/tls` and
+  the Chrome hello get `200`), so a genuine `4003110` could not be provoked from
+  here; the WAF path that *was* hit earlier (`403` with an empty body) is
+  reported as `ErrWAF` rather than mistaken for a dead room.

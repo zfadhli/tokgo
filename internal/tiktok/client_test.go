@@ -73,14 +73,19 @@ func TestNewSeedsCookieJarAndHosts(t *testing.T) {
 	}
 }
 
-func TestTransportTimeouts(t *testing.T) {
+func TestTransportWiring(t *testing.T) {
 	c := New("http://127.0.0.1:9", nil)
 	tr, ok := c.hc.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("transport is %T, want *http.Transport", c.hc.Transport)
 	}
-	if tr.Proxy == nil {
-		t.Error("proxied client has no Proxy func")
+	// The proxy is tunnelled inside the dialer, so Transport.Proxy must stay nil
+	// or http.Transport would skip DialTLSContext and drop the Chrome hello.
+	if tr.Proxy != nil {
+		t.Error("Transport.Proxy must stay nil, the dialer handles the tunnel")
+	}
+	if tr.DialTLSContext == nil {
+		t.Error("DialTLSContext must be set or TLS falls back to crypto/tls")
 	}
 	if tr.TLSHandshakeTimeout != 15*time.Second {
 		t.Errorf("TLSHandshakeTimeout = %v, want 15s", tr.TLSHandshakeTimeout)
@@ -88,8 +93,8 @@ func TestTransportTimeouts(t *testing.T) {
 	if tr.ResponseHeaderTimeout != 30*time.Second {
 		t.Errorf("ResponseHeaderTimeout = %v, want 30s", tr.ResponseHeaderTimeout)
 	}
-	if !tr.ForceAttemptHTTP2 {
-		t.Error("ForceAttemptHTTP2 should be set")
+	if tr.ForceAttemptHTTP2 {
+		t.Error("ForceAttemptHTTP2 must stay off to keep the HTTP/1.1 ALPN")
 	}
 	if tr.DialContext == nil {
 		t.Error("DialContext should be set")
@@ -126,12 +131,12 @@ func TestRequestCarriesChromeHeaders(t *testing.T) {
 	resp.Body.Close()
 
 	want := map[string]string{
-		"User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.127 Safari/537.36",
+		"User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 		"Accept-Language":           "en-US",
 		"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,application/json,text/plain,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 		"Referer":                   "https://www.tiktok.com/",
 		"Origin":                    "https://www.tiktok.com",
-		"Sec-Ch-Ua":                 `"Not/A)Brand";v="8", "Chromium";v="126"`,
+		"Sec-Ch-Ua":                 `"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`,
 		"Sec-Ch-Ua-Mobile":          "?0",
 		"Sec-Ch-Ua-Platform":        `"Windows"`,
 		"Upgrade-Insecure-Requests": "1",
