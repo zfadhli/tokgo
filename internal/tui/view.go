@@ -276,13 +276,18 @@ func (m *Model) monitorFooter() string {
 }
 
 // monitorBody splits the width between the target list and the activity pane.
-// Under 72 columns the log pane is dropped rather than squeezed.
+// Under 72 columns the log pane is dropped rather than squeezed, and above it
+// the list grows to fit its longest label while the log keeps 34 columns: the
+// account name identifies the row, so it clips last.
 func (m *Model) monitorBody(w, body int) []string {
 	body = max(body, 0)
 	if w < 72 {
 		return m.leftPane(w, body)
 	}
 	leftW := min(max(w*37/100, 36), 56)
+	if need := m.nameNeed() + phaseWidth + 20; need > leftW {
+		leftW = min(need, min(56, w-35))
+	}
 	rightW := w - leftW - 1
 	left := m.leftPane(leftW, body)
 	right := m.rightPane(rightW, body)
@@ -327,6 +332,15 @@ func (m *Model) leftPane(w, body int) []string {
 		lines = append(lines, "")
 	}
 	return lines[:body]
+}
+
+// nameNeed is the widest label on screen, so the column can be sized from it.
+func (m *Model) nameNeed() int {
+	need := 8
+	for _, t := range m.targets {
+		need = max(need, len([]rune(t.label)))
+	}
+	return need
 }
 
 // rowLine is marker, label, phase, timer, size in fixed columns, so the table
