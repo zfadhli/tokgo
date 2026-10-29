@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -195,7 +196,7 @@ func TestRecordDiscardsSegmentsFromASubThresholdCandidate(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("file holds %d bytes, want only the accepted stream's %d", len(got), len(payload))
 	}
-	if junk, err := filepath.Glob(filepath.Join(dir, "TK_*.000.*")); err != nil || len(junk) != 0 {
+	if junk, err := filepath.Glob(filepath.Join(dir, "user=*.000.ts")); err != nil || len(junk) != 0 {
 		t.Fatalf("left %v behind, %v, want the discarded segment removed", junk, err)
 	}
 	assertOnlyRecording(t, dir, path)
@@ -296,8 +297,52 @@ func TestRecordReconnectWritesOneSegmentPerConnection(t *testing.T) {
 	assertOnlyRecording(t, dir, path)
 }
 
-// A broken ffmpeg must not cost a single byte: the capture goes straight to a
-// .flv segment and the run keeps it when the remux cannot run either.
+// The filename is the output: <user>=<YYYYMMDD_HHMMSS>, segments indexed under
+// it. A dotted, underscored handle is a real TikTok username shape and must
+// survive the mp4 derivation.
+func TestRecordingNameIsTheUserJoinedToTheStartTime(t *testing.T) {
+	const user = "donut_ntp.42"
+	payload := streamBytes()
+	api := &fakeAPI{
+		urls:  []string{"url-a"},
+		alive: runsOnce,
+		open: func(context.Context, string) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(payload)), nil
+		},
+	}
+	stub, calls := ffmpegStub(t, "")
+	dir := t.TempDir()
+	rec := New(api, Options{OutputDir: dir, FFmpegPath: stub})
+
+	before := time.Now().Add(-time.Second)
+	path, err := rec.Record(context.Background(), user, "room")
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if got := filepath.Dir(path); got != dir {
+		t.Fatalf("recorded into %q, want %q", got, dir)
+	}
+	name := filepath.Base(path)
+	m := recordingName.FindStringSubmatch(name)
+	if m == nil {
+		t.Fatalf("recorded %q, want %s=<YYYYMMDD_HHMMSS>.mp4", name, user)
+	}
+	if m[1] != user {
+		t.Fatalf("name carries user %q, want %q", m[1], user)
+	}
+	start, err := time.ParseInLocation("20060102_150405", m[2], time.Local)
+	if err != nil || start.Before(before) || start.After(time.Now().Add(time.Second)) {
+		t.Fatalf("timestamp %q is not the recording start: %v, %v", m[2], start, err)
+	}
+	segment := filepath.Join(dir, user+"="+m[2]+".000.ts")
+	if invocations := stubCalls(t, calls); !strings.Contains(invocations[0], segment) {
+		t.Fatalf("first muxer call = %q, want the segment %s", invocations[0], segment)
+	}
+	assertOnlyRecording(t, dir, path)
+}
+
+var recordingName = regexp.MustCompile(`^(.+)=(\d{8}_\d{6})\.mp4$`)
+
 func TestRecordFallsBackToRawCaptureWhenMuxerFails(t *testing.T) {
 	payload := streamBytes()
 	api := &fakeAPI{

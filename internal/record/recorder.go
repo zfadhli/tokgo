@@ -95,7 +95,7 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 
 	sess := &session{
 		ffmpegPath: r.opts.FFmpegPath,
-		base:       filepath.Join(r.opts.OutputDir, "TK_"+user+"_"+start.Format("2006.01.02_15-04-05")),
+		base:       filepath.Join(r.opts.OutputDir, user+"="+start.Format("20060102_150405")),
 	}
 	var deadline time.Time
 	if r.opts.Duration > 0 {

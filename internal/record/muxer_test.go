@@ -12,7 +12,7 @@ import (
 // A muxer that stops reading leaves the writer parked in a full pipe. Only the
 // interrupt can release it, so this test would hang on the old body-only close.
 func TestMuxerInterruptUnblocksAStalledWrite(t *testing.T) {
-	out := filepath.Join(t.TempDir(), "TK_a_2025.01.01_00-00-00.000.ts")
+	out := filepath.Join(t.TempDir(), "a=20250101_000000.000.ts")
 	stub, _ := ffmpegStub(t, "sleep 1") // never reads stdin
 	m, err := startMuxer(stub, out)
 	if err != nil {

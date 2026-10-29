@@ -10,9 +10,10 @@ import (
 
 func TestOutputPathFromSegment(t *testing.T) {
 	cases := []struct{ segment, want string }{
-		{"TK_u_2025.01.01_00-00-00.000.ts", "TK_u_2025.01.01_00-00-00.mp4"},
-		{"TK_u_2025.01.01_00-00-00.007.ts", "TK_u_2025.01.01_00-00-00.mp4"},
-		{"TK_u_2025.01.01_00-00-00.000.flv", "TK_u_2025.01.01_00-00-00.mp4"},
+		{"u=20250101_000000.000.ts", "u=20250101_000000.mp4"},
+		{"u=20250101_000000.007.ts", "u=20250101_000000.mp4"},
+		{"u=20250101_000000.000.flv", "u=20250101_000000.mp4"},
+		{"donut_ntp.42=20261028_172928.000.ts", "donut_ntp.42=20261028_172928.mp4"},
 	}
 	for _, tc := range cases {
 		if got := outputPath(tc.segment); got != tc.want {
@@ -31,15 +32,15 @@ func TestFFmpegArgs(t *testing.T) {
 		{
 			name:    "stream copy without bitrate",
 			bitrate: "",
-			want:    []string{"-y", "-i", "TK_a.000.ts", "-c", "copy", "TK_a.mp4"},
+			want:    []string{"-y", "-i", "a=20250101_000000.000.ts", "-c", "copy", "a=20250101_000000.mp4"},
 		},
 		{
 			name:    "re-encode video with bitrate",
 			bitrate: "1500k",
 			want: []string{
-				"-y", "-i", "TK_a.000.ts",
+				"-y", "-i", "a=20250101_000000.000.ts",
 				"-c:v", "libx264", "-b:v", "1500k", "-c:a", "copy",
-				"TK_a.mp4",
+				"a=20250101_000000.mp4",
 			},
 		},
 		{
@@ -47,15 +48,15 @@ func TestFFmpegArgs(t *testing.T) {
 			concat: true,
 			want: []string{
 				"-y", "-f", "concat", "-safe", "0", "-i", "list.txt",
-				"-c", "copy", "TK_a.mp4",
+				"-c", "copy", "a=20250101_000000.mp4",
 			},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ffmpegArgs("TK_a.000.ts", "TK_a.mp4", tc.bitrate, tc.concat)
+			got := ffmpegArgs("a=20250101_000000.000.ts", "a=20250101_000000.mp4", tc.bitrate, tc.concat)
 			if tc.concat {
-				got = ffmpegArgs("list.txt", "TK_a.mp4", tc.bitrate, tc.concat)
+				got = ffmpegArgs("list.txt", "a=20250101_000000.mp4", tc.bitrate, tc.concat)
 			}
 			if len(got) != len(tc.want) {
 				t.Fatalf("args = %q, want %q", got, tc.want)
@@ -75,7 +76,7 @@ func TestConvertRemuxesOneSegment(t *testing.T) {
 	for _, ext := range []string{".ts", ".flv"} {
 		t.Run(ext, func(t *testing.T) {
 			dir := t.TempDir()
-			in := filepath.Join(dir, "TK_a_2025.01.01_00-00-00.000"+ext)
+			in := filepath.Join(dir, "a=20250101_000000.000"+ext)
 			if err := os.WriteFile(in, []byte("captured"), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -85,7 +86,7 @@ func TestConvertRemuxesOneSegment(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Convert: %v", err)
 			}
-			want := filepath.Join(dir, "TK_a_2025.01.01_00-00-00.mp4")
+			want := filepath.Join(dir, "a=20250101_000000.mp4")
 			if got != want {
 				t.Fatalf("Convert returned %q, want %q", got, want)
 			}
@@ -103,8 +104,8 @@ func TestConvertRemuxesOneSegment(t *testing.T) {
 // scratch concat list does not survive.
 func TestConvertConcatenatesSegments(t *testing.T) {
 	dir := t.TempDir()
-	first := filepath.Join(dir, "TK_a_2025.01.01_00-00-00.000.ts")
-	second := filepath.Join(dir, "TK_a_2025.01.01_00-00-00.001.ts")
+	first := filepath.Join(dir, "a=20250101_000000.000.ts")
+	second := filepath.Join(dir, "a=20250101_000000.001.ts")
 	for path, body := range map[string]string{first: "first ", second: "second"} {
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -116,7 +117,7 @@ func TestConvertConcatenatesSegments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
-	want := filepath.Join(dir, "TK_a_2025.01.01_00-00-00.mp4")
+	want := filepath.Join(dir, "a=20250101_000000.mp4")
 	if got != want {
 		t.Fatalf("Convert returned %q, want %q", got, want)
 	}
@@ -138,8 +139,8 @@ func TestConvertConcatenatesSegments(t *testing.T) {
 
 func TestConvertReportsFFmpegOutput(t *testing.T) {
 	dir := t.TempDir()
-	first := filepath.Join(dir, "TK_b_2025.01.01_00-00-00.000.ts")
-	last := filepath.Join(dir, "TK_b_2025.01.01_00-00-00.001.ts")
+	first := filepath.Join(dir, "b=20250101_000000.000.ts")
+	last := filepath.Join(dir, "b=20250101_000000.001.ts")
 	for _, path := range []string{first, last} {
 		if err := os.WriteFile(path, []byte("garbage"), 0o644); err != nil {
 			t.Fatal(err)
@@ -216,7 +217,7 @@ func stubCalls(t *testing.T, calls string) []string {
 // path comes back with the error.
 func TestConvertKeepsTheOutputPathWhenCleanupFails(t *testing.T) {
 	dir := t.TempDir()
-	segment := filepath.Join(dir, "TK_a_2025.01.01_00-00-00.000.ts")
+	segment := filepath.Join(dir, "a=20250101_000000.000.ts")
 	if err := os.WriteFile(segment, []byte("captured"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +228,7 @@ func TestConvertKeepsTheOutputPathWhenCleanupFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error when a segment cannot be removed")
 	}
-	want := filepath.Join(dir, "TK_a_2025.01.01_00-00-00.mp4")
+	want := filepath.Join(dir, "a=20250101_000000.mp4")
 	if got != want {
 		t.Fatalf("Convert returned %q, want the finished recording %q", got, want)
 	}

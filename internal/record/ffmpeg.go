@@ -71,7 +71,8 @@ func ffmpegArgs(in, out, bitrate string, concat bool) []string {
 }
 
 // outputPath maps the first capture segment to the final mp4, dropping the
-// per-connection index and the capture container: TK_u_ts.000.ts -> TK_u_ts.mp4.
+// per-connection index and the capture container: u_ts.000.ts -> u_ts.mp4.
+// A dot in the username survives: the stripped suffix must parse as an index.
 func outputPath(segment string) string {
 	base := strings.TrimSuffix(segment, filepath.Ext(segment))
 	if i := strings.LastIndexByte(base, '.'); i >= 0 {
