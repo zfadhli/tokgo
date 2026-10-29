@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"tokgo/internal/logx"
 )
@@ -47,4 +48,24 @@ func CheckFFmpeg(path string) error {
 		return fmt.Errorf("ffmpeg not found (%s) - install it or pass -ffmpeg-path: %w", path, err)
 	}
 	return nil
+}
+
+// FFmpegVersion returns the release string of the binary at path, without the
+// distro suffix (7.1.1-essentials_build becomes 7.1.1), or "" when it cannot be
+// run.
+func FFmpegVersion(path string) string {
+	if path == "" {
+		path = "ffmpeg"
+	}
+	out, err := exec.Command(path, "-version").Output()
+	if err != nil {
+		return ""
+	}
+	line, _, _ := strings.Cut(string(out), "\n")
+	fields := strings.Fields(line)
+	if len(fields) < 3 {
+		return ""
+	}
+	version, _, _ := strings.Cut(fields[2], "-")
+	return version
 }

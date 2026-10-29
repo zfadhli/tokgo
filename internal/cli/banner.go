@@ -1,11 +1,18 @@
 package cli
 
-import "fmt"
+import (
+	"fmt"
+
+	"tokgo/internal/ui"
+)
 
 // banner prints the wordmark and version above the run, or above the usage text
 // when the command line is rejected.
 func banner(version string) {
-	fmt.Printf("%sv%s\n\n", bannerArt, version)
+	fmt.Print(bannerArt)
+	fmt.Println(ui.Bold("tokgo v"+version) + " — TikTok LIVE recorder")
+	fmt.Println(ui.Dim("https://github.com/zfadhli/tokgo · MIT License"))
+	fmt.Println()
 }
 
 const bannerArt = `
