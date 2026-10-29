@@ -1,60 +1,60 @@
 {
-  "nextId": 6,
+  "nextId": 7,
   "tasks": [
     {
       "id": "1",
       "subject": "Read principles + route feature playbook",
       "description": "poteto-mode: read playbook, plan, throughput checkpoint",
-      "status": "pending",
+      "status": "completed",
       "metadata": {},
       "blocks": [],
       "blockedBy": [],
       "createdAt": 1793250817580,
-      "updatedAt": 1793250817580
+      "updatedAt": 1793250877391
     },
     {
       "id": "2",
       "subject": "TDD slice 1: write failing test",
       "description": "failing flags_test.go covering brief's case list, run and watch it fail",
-      "status": "pending",
+      "status": "completed",
       "metadata": {},
       "blocks": [],
       "blockedBy": [],
       "createdAt": 1793250825573,
-      "updatedAt": 1793250825573
+      "updatedAt": 1793250877393
     },
     {
       "id": "3",
       "subject": "TDD slice 2: implement flags.go",
       "description": "minimal Parse/Usage/Parsed to green",
-      "status": "pending",
+      "status": "completed",
       "metadata": {},
       "blocks": [],
       "blockedBy": [],
       "createdAt": 1793250825573,
-      "updatedAt": 1793250825573
+      "updatedAt": 1793250951388
     },
     {
       "id": "4",
       "subject": "Verify: build+vet+test on internal/cli only",
       "description": "gofmt -w, go build ./internal/cli/, go vet ./internal/cli/, go test ./internal/cli/",
-      "status": "pending",
+      "status": "completed",
       "metadata": {},
       "blocks": [],
       "blockedBy": [],
       "createdAt": 1793250825574,
-      "updatedAt": 1793250825574
+      "updatedAt": 1793250951389
     },
     {
       "id": "5",
       "subject": "Throughput checkpoint (4 dimensions)",
       "description": "Blocking first steps done: read internal/config/config.go API. Architect skipped: brief fixes the exact API and struct shape, no design fork. Independent workstreams n/a: one package, two files. Shared mutable state n/a: only internal/cli/ is mine; siblings own disjoint dirs. Smallest safe decomposition: one worker (me); no Agent tool in this sub-agent toolset and TaskExecute fan-out for a 2-file slice would duplicate the review I must do anyway. Git commits n/a: /home/envs4/workspaces/tokgo is not a git repository (verified git status -> fatal).",
-      "status": "pending",
+      "status": "completed",
       "metadata": {},
       "blocks": [],
       "blockedBy": [],
       "createdAt": 1793250825574,
-      "updatedAt": 1793250825574
+      "updatedAt": 1793250951390
     }
   ]
 }

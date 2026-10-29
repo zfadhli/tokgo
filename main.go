@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -16,7 +17,6 @@ import (
 
 	"tokgo/internal/app"
 	"tokgo/internal/cli"
-	"tokgo/internal/config"
 	"tokgo/internal/logx"
 	"tokgo/internal/telegram"
 )
@@ -35,7 +35,8 @@ func main() {
 
 	parsed, err := cli.Parse(os.Args[1:])
 	if err != nil {
-		if errors.Is(err, errHelp) {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprint(os.Stdout, cli.Usage())
 			return
 		}
 		fmt.Fprintln(os.Stderr, err)
@@ -43,7 +44,13 @@ func main() {
 		os.Exit(2)
 	}
 	cfg := parsed.Config
-	cfg.Cookies = readCookies(cfgUserCookiePath)
+	cfg.Cookies = readCookies(cookieFile)
+	if cfg.OutputDir != "" {
+		if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
+			logx.Errorf("cannot create output directory %s: %v", cfg.OutputDir, err)
+			os.Exit(1)
+		}
+	}
 
 	if err := checkFFmpeg(cfg.FFmpegPath); err != nil {
 		logx.Errorf("%v", err)
@@ -72,11 +79,8 @@ func main() {
 	}
 }
 
-// errHelp signals that the user asked for usage output, which is not a failure.
-var errHelp = cli.ErrHelp
-
-// cfgUserCookiePath is where cookies live; it matches the reference layout.
-const cfgUserCookiePath = "cookies.json"
+// cookieFile is where cookies live, matching the reference layout.
+const cookieFile = "cookies.json"
 
 // readCookies tolerates a missing or empty file: anonymous lookups still work
 // for public rooms, and every path that truly needs a login reports it itself.
