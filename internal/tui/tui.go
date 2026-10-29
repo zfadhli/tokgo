@@ -111,6 +111,7 @@ type Model struct {
 	ended        time.Time
 	runInterval  time.Duration // the in-flight run's poll interval, not next-run settings
 	finishing    bool
+	quitAfter    bool // a quit is waiting for the run to remux and return
 	result       error
 	quit         bool
 	cancel       context.CancelFunc
@@ -236,6 +237,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ctx = nil
 		m.users = nil
 		m.finishing = false
+		if m.quitAfter {
+			m.quit = true
+			return m, tea.Quit
+		}
 		pending := m.restarting
 		m.restarting = nil
 		if len(pending) == 0 {
@@ -796,7 +801,7 @@ var commands = []command{
 	{"proxy", "<url>", "proxy for lookups, alone clears it"},
 	{"telegram", "on|off", "upload each recording when it is written"},
 	{"stop", "<name|all>", "stop one target, or the whole run and remux what was captured"},
-	{"quit", "", "leave now, without finishing a remux"},
+	{"quit", "", "stop the run, finish its remux, then exit"},
 	{"help", "", "show this list"},
 }
 
@@ -964,7 +969,15 @@ func (m *Model) command(line string) tea.Cmd {
 	case "stop":
 		m.stopCommand(rest)
 	case "quit":
-		m.stopRun()
+		// A run still has a remux to finish, so the first quit stops it and
+		// waits; a second one leaves without it.
+		if m.ctrl != nil && !m.quitAfter {
+			m.stopRun()
+			m.quitAfter = true
+			m.appendLog(logLine{level: "STOP", text: "quitting · finishing remux"})
+			return nil
+		}
+		m.stop()
 		m.quit = true
 		return tea.Quit
 	case "help":

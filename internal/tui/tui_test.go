@@ -381,6 +381,58 @@ func TestQuitSetsTheFlag(t *testing.T) {
 	}
 }
 
+// TestQuitWaitsForTheRemux pins the rule: a live run is stopped, not abandoned,
+// and the screen leaves only once the runner returned.
+func TestQuitWaitsForTheRemux(t *testing.T) {
+	m := newModel()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.ctrl = &fakeCtrl{}
+	m.cancel = cancel
+	m.ctx = ctx
+
+	if cmd := submit(m, "/quit"); cmd != nil {
+		t.Fatal("/quit must not leave while the run is still remuxing")
+	}
+	if m.quit {
+		t.Fatal("/quit must not set the quit flag before the run returned")
+	}
+	if ctx.Err() == nil {
+		t.Fatal("/quit must cancel the run")
+	}
+	if !m.finishing {
+		t.Fatal("/quit must mark the run as stopping")
+	}
+
+	_, cmd := m.Update(runDoneMsg{})
+	if !m.quit {
+		t.Fatal("the screen must leave once the run returned")
+	}
+	if cmd == nil {
+		t.Fatal("a finished quit must return tea.Quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("a finished quit must return the quit command")
+	}
+}
+
+// TestSecondQuitLeavesNow is the escape hatch: a remux that never returns must
+// not trap the screen.
+func TestSecondQuitLeavesNow(t *testing.T) {
+	m := newModel()
+	m.ctrl = &fakeCtrl{}
+	submit(m, "/quit")
+	cmd := submit(m, "/quit")
+	if !m.quit {
+		t.Fatal("the second /quit must set the quit flag")
+	}
+	if cmd == nil {
+		t.Fatal("the second /quit must return tea.Quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("the second /quit must return the quit command")
+	}
+}
+
 func TestHistoryRecall(t *testing.T) {
 	m := newModel()
 	submit(m, "alpha")
