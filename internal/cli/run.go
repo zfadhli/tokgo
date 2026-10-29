@@ -81,7 +81,7 @@ func header(cfg config.Config, users []string) {
 	}
 	fmt.Println("  " + ui.Label("output") + line)
 
-	fmt.Println("  " + ui.Label("cookies") + ui.Value(cookieLine(cfg.Cookies)))
+	fmt.Println("  " + ui.Label("cookies") + ui.Value(CookieLine(cfg.Cookies)))
 	fmt.Println()
 }
 
@@ -104,8 +104,8 @@ func targetLine(cfg config.Config, users []string) (string, string) {
 	return target, mode
 }
 
-// cookieLine names the login cookie without printing it.
-func cookieLine(cookies map[string]string) string {
+// CookieLine names the login cookie without printing it.
+func CookieLine(cookies map[string]string) string {
 	for _, name := range [...]string{"sessionid_ss", "sessionid"} {
 		value := cookies[name]
 		if value == "" {

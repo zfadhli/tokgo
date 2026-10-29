@@ -37,7 +37,7 @@ var (
 const (
 	// phaseWidth is the phase column. The words are cue words, not Phase.String().
 	phaseWidth = 6
-	keysHint   = "enter submit · tab complete · /help · ctrl+c stop"
+	keysHint   = "enter submit · tab complete · /help · /quit exit"
 	emptyState = "no targets yet · type a username below"
 )
 

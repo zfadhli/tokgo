@@ -6,6 +6,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strconv"
@@ -257,13 +258,6 @@ func (m *Model) appendLog(line logLine) {
 
 func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c":
-		if m.ctrl != nil && !m.finishing {
-			m.stopRun()
-			return m, nil
-		}
-		m.quit = true
-		return m, tea.Quit
 	case "esc":
 		if m.ctrl != nil {
 			m.stopRun()
@@ -481,6 +475,97 @@ func (m *Model) restart(raw string) tea.Cmd {
 	return nil
 }
 
+// remove takes a target off the saved list, and stops it when it is still
+// recording: a name you removed should not keep writing files.
+func (m *Model) remove(raw string) {
+	user := strings.TrimPrefix(strings.TrimSpace(raw), "@")
+	if user == "" {
+		m.warn("remove needs a username")
+		return
+	}
+	i := slices.Index(m.list, user)
+	if i < 0 {
+		m.warn("@" + user + " is not saved")
+		return
+	}
+	m.list = slices.Delete(m.list, i, i+1)
+	if err := saveTargets(m.userPath, m.list); err != nil {
+		m.warn("cannot save the target list: " + err.Error())
+	}
+	m.forgetRestart(user)
+	// A target the run still holds keeps its row until the terminal status, so
+	// the stopped capture stays visible with its size.
+	if !(m.ctrl != nil && m.ctrl.DropUser(user)) {
+		m.dropRow(user)
+	}
+	m.appendLog(logLine{level: "INFO", text: "removed @" + user})
+}
+
+// dropRow takes one row out of the table and closes the gap it leaves.
+func (m *Model) dropRow(user string) {
+	i, ok := m.byName[user]
+	if !ok {
+		return
+	}
+	m.targets = slices.Delete(m.targets, i, i+1)
+	m.byName = make(map[string]int, len(m.targets))
+	for j, t := range m.targets {
+		m.byName[t.user] = j
+	}
+}
+
+// showConfig prints what the next run would use. The live run keeps the values
+// it started with, so it says so rather than pretending they changed.
+func (m *Model) showConfig() {
+	mode := fmt.Sprintf("wait for live, poll %d min", m.settings.interval)
+	if m.settings.once {
+		mode = "record once"
+	}
+	duration := "no cap"
+	if m.settings.duration > 0 {
+		duration = fmt.Sprintf("%d min", m.settings.duration)
+	}
+	proxy := m.settings.proxy
+	if proxy == "" {
+		proxy = "none"
+	}
+	telegram := "off"
+	if m.settings.telegram {
+		telegram = "on"
+	}
+	rows := [][2]string{
+		{"mode", mode},
+		{"duration", duration},
+		{"output", m.outputDir()},
+		{"proxy", proxy},
+		{"telegram", telegram},
+		{"cookies", cli.CookieLine(m.cookies)},
+		{"targets", fmt.Sprintf("%d saved · %s", len(m.list), m.userPath)},
+	}
+	for _, row := range rows {
+		value := row[1]
+		if value == "" {
+			value = "not saved"
+		}
+		m.appendLog(logLine{level: "INFO", text: padRight(row[0], 10) + " " + value})
+	}
+	if m.ctrl != nil {
+		m.appendLog(logLine{level: "INFO", text: "a run is in flight · changes apply to the next run"})
+	}
+}
+
+// outputDir is the directory recordings land in, defaulting to the working
+// directory the way the flags do.
+func (m *Model) outputDir() string {
+	if m.settings.output != "" {
+		return m.settings.output
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return wd + " (default)"
+	}
+	return "the current directory"
+}
+
 // setCookies stores the TikTok login cookie and writes it back for the next
 // launch. The value itself never reaches the activity pane.
 func (m *Model) setCookies(raw string) {
@@ -530,8 +615,10 @@ var commands = []command{
 	{"add", "<name,...>", "save names to the list, and add them to a live run"},
 	{"start", "<name|all>", "start one saved target, or every saved target"},
 	{"restart", "<name>", "stop one target, let it remux, then start it again"},
-	{"cookies", "<sessionid_ss>", "set the TikTok login cookie, saved to cookies.json"},
+	{"remove", "<name>", "take one target off the saved list"},
 	{"drop", "<name>", "stop one target, keep it in the list"},
+	{"config", "", "show the settings the next run will use"},
+	{"cookies", "<sessionid_ss>", "set the TikTok login cookie, saved to cookies.json"},
 	{"once", "", "record one session per target"},
 	{"wait", "", "wait for the next stream (default)"},
 	{"duration", "<min>", "cap each session in minutes, 0 = no cap"},
@@ -578,7 +665,7 @@ func (m *Model) candidates(value string) []string {
 			out = append(out, "/start all")
 		}
 		names()
-	case "/restart", "/drop", "/add":
+	case "/restart", "/remove", "/drop", "/add":
 		names()
 	case "/telegram":
 		for _, mode := range []string{"on", "off"} {
@@ -665,6 +752,10 @@ func (m *Model) command(line string) tea.Cmd {
 		return m.startUsers(names)
 	case "restart":
 		return m.restart(rest)
+	case "remove":
+		m.remove(rest)
+	case "config":
+		m.showConfig()
 	case "cookies":
 		m.setCookies(rest)
 	case "once":
