@@ -135,7 +135,8 @@ visible without opening the file.
 
 Both the autostart group and `/start all` start one target every 10 seconds, so
 a dozen names do not all ask TikTok for a room id from one address at once.
-`/start <name>` is immediate, and `/stop` clears whatever is still queued.
+`/start <name>` is immediate, and `/stop <name|all>` clears whatever is still
+queued: one target, or the whole group.
 
 Tab completes a command name or a saved username, and the hint line under the
 input shows what tab would fill.
@@ -156,7 +157,7 @@ input shows what tab would fill.
 | `/output <dir>` | where recordings land |
 | `/proxy <url>` | proxy for lookups, alone clears it |
 | `/telegram on\|off` | upload each recording when it is written |
-| `/stop` | stop the run, finish the capture and remux |
+| `/stop <name\|all>` | stop one queued or recording target, or the whole run: the capture is finished and remuxed |
 | `/quit` | leave now, without waiting for a remux; the only exit |
 | `/help` | print the list |
 
