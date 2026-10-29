@@ -124,22 +124,16 @@ func hasPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
 
-// TestImpersonationVersusPlainTLS requests the same signed TikTok URL with Go's
-// TLS stack and with the Chrome one. TikTok's WAF fingerprints the handshake, so
-// this is the measurement that justifies the dependency.
+// TestImpersonationVersusPlainTLS requests the same TikTok URL with Go's TLS
+// stack and with the Chrome one. TikTok's WAF fingerprints the handshake, so this
+// is the measurement that justifies the dependency.
 func TestImpersonationVersusPlainTLS(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
 	chrome := New("", nil)
-	signed, err := chrome.signedRoomURL(ctx, "tiktok")
-	if err != nil {
-		t.Skipf("signing service unavailable: %v", err)
-	}
+	lookup := chrome.base + "/api-live/user/room/?aid=1988&sourceType=54&uniqueId=tiktok"
 
-	plainStatus := statusOf(t, plainClient(), signed)
-	chromeStatus := statusOf(t, chrome, signed)
-	t.Logf("signed room url: crypto/tls=%d utls-chrome=%d", plainStatus, chromeStatus)
+	plainStatus := statusOf(t, plainClient(), lookup)
+	chromeStatus := statusOf(t, chrome, lookup)
+	t.Logf("room lookup: crypto/tls=%d utls-chrome=%d", plainStatus, chromeStatus)
 
 	if chromeStatus != http.StatusOK {
 		t.Errorf("the impersonating client got %d, want 200", chromeStatus)

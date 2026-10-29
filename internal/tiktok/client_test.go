@@ -16,7 +16,7 @@ func newTestClient(t *testing.T, h http.Handler) *Client {
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	c := New("", nil)
-	c.base, c.webcast, c.euler, c.tikrec = srv.URL, srv.URL, srv.URL, srv.URL
+	c.base, c.webcast = srv.URL, srv.URL
 	return c
 }
 
@@ -59,10 +59,8 @@ func TestNewSeedsCookieJarAndHosts(t *testing.T) {
 	want := map[string]string{
 		"base":    "https://www.tiktok.com",
 		"webcast": "https://webcast.tiktok.com",
-		"euler":   "https://tiktok.eulerstream.com",
-		"tikrec":  "https://tikrec.com",
 	}
-	got := map[string]string{"base": c.base, "webcast": c.webcast, "euler": c.euler, "tikrec": c.tikrec}
+	got := map[string]string{"base": c.base, "webcast": c.webcast}
 	for k, v := range want {
 		if got[k] != v {
 			t.Errorf("%s host = %q, want %q", k, got[k], v)

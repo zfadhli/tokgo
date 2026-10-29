@@ -3,7 +3,6 @@ package tiktok
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -106,22 +105,11 @@ func (c *Client) LiveURLs(ctx context.Context, roomID, user string) ([]string, e
 	return info.Candidates(), nil
 }
 
-// RoomIDForUser resolves a username to a room id, preferring the tikrec signed
-// lookup and falling back to euler when that service is down.
+// RoomIDForUser resolves a username to a room id through TikTok's own live
+// endpoint. It needs no signature, no cookie and no third party: the plain
+// endpoint answers a Chrome-shaped request directly.
 func (c *Client) RoomIDForUser(ctx context.Context, user string) (string, error) {
-	signed, signErr := c.signedRoomURL(ctx, user)
-	if signed == "" {
-		id, err := c.eulerRoomID(ctx, user)
-		if err != nil {
-			if signErr != nil {
-				return "", fmt.Errorf("%w (sign service unavailable: %v)", ErrRoomID, signErr)
-			}
-			return "", err
-		}
-		return id, nil
-	}
-
-	resp, err := c.get(ctx, signed, false)
+	resp, err := c.get(ctx, c.base+"/api-live/user/room/?aid=1988&sourceType=54&uniqueId="+url.QueryEscape(user), false)
 	if err != nil {
 		return "", err
 	}
@@ -130,12 +118,17 @@ func (c *Client) RoomIDForUser(ctx context.Context, user string) (string, error)
 	if err != nil {
 		return "", err
 	}
+	if resp.StatusCode == http.StatusForbidden {
+		return "", ErrWAF
+	}
 	text := strings.TrimSpace(string(body))
-	if text == "" || strings.Contains(text, "Please wait") {
+	if text == "" || strings.Contains(text, "Please wait") || strings.Contains(text, "SlardarWAF") {
 		return "", ErrWAF
 	}
 	var payload struct {
-		Data struct {
+		StatusCode int    `json:"statusCode"`
+		Msg        string `json:"msg"`
+		Data       struct {
 			User struct {
 				RoomID FlexString `json:"roomId"`
 			} `json:"user"`
@@ -145,10 +138,13 @@ func (c *Client) RoomIDForUser(ctx context.Context, user string) (string, error)
 		logx.Warnf("unparsable room id response: %v", err)
 		return "", ErrRoomID
 	}
-	if payload.Data.User.RoomID == "" {
-		return "", ErrRoomID
+	if payload.Data.User.RoomID != "" {
+		return string(payload.Data.User.RoomID), nil
 	}
-	return string(payload.Data.User.RoomID), nil
+	if payload.Msg != "" {
+		return "", fmt.Errorf("%w (status %d: %s)", ErrRoomID, payload.StatusCode, payload.Msg)
+	}
+	return "", fmt.Errorf("%w (status %d)", ErrRoomID, payload.StatusCode)
 }
 
 // UserForRoomID resolves a room id to the broadcaster's display id.
@@ -278,131 +274,20 @@ func (c *Client) scrapeLiveURL(ctx context.Context, user string) string {
 	return strings.TrimRight(html.UnescapeString(picked), `\`)
 }
 
-func (c *Client) signedRoomURL(ctx context.Context, user string) (string, error) {
-	resp, err := c.get(ctx, c.tikrec+"/tiktok/room/api/sign?unique_id="+url.QueryEscape(user), false)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
-	}
-	var signed struct {
-		SignedURL  string `json:"signed_url"`
-		SignedPath string `json:"signed_path"`
-	}
-	if err := json.Unmarshal(body, &signed); err != nil {
-		return "", fmt.Errorf("unparsable sign response: %w", err)
-	}
-	if signed.SignedURL != "" {
-		return signed.SignedURL, nil
-	}
-	if signed.SignedPath != "" {
-		return c.base + signed.SignedPath, nil
-	}
-	return "", errors.New("no signed url in the response")
-}
-
-func (c *Client) eulerRoomID(ctx context.Context, user string) (string, error) {
-	req, err := c.request(ctx, c.euler+"/webcast/room_info?uniqueId="+url.QueryEscape(user)+"&giftInfo=false")
-	if err != nil {
-		return "", ErrRoomID
-	}
-	req.Header.Set("x-api-key", "")
-	resp, err := c.do(req, false)
-	if err != nil {
-		return "", ErrRoomID
-	}
-	defer resp.Body.Close()
-	var payload struct {
-		Data struct {
-			RoomInfo struct {
-				ID FlexString `json:"id"`
-			} `json:"room_info"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", ErrRoomID
-	}
-	if payload.Data.RoomInfo.ID == "" {
-		return "", ErrRoomID
-	}
-	return string(payload.Data.RoomInfo.ID), nil
-}
-
 func decodeInto(resp *http.Response, v any) error {
 	defer resp.Body.Close()
 	return json.NewDecoder(resp.Body).Decode(v)
 }
 
-// restrictedURLs handles a room the webcast API refuses with 4003110. The web
-// UI endpoint reached through the signing service carries the same stream
-// manifest and is not subject to that refusal, so it is tried first. The public
-// live page is the second attempt: TikTok increasingly answers it with a
-// SlardarWAF stub, so it can no longer be relied on alone.
+// restrictedURLs handles a room the webcast API refuses with 4003110. The public
+// live page is the only remaining source: TikTok usually answers it with a
+// SlardarWAF stub, so a login-gated room normally needs cookies.
 func (c *Client) restrictedURLs(ctx context.Context, user string) ([]string, error) {
 	if user != "" {
-		if urls, err := c.signedLiveURLs(ctx, user); err == nil && len(urls) > 0 {
-			logx.Infof("room api refused the room, resolved %d stream urls from the signed web endpoint", len(urls))
-			return urls, nil
-		}
 		if streamURL := c.scrapeLiveURL(ctx, user); streamURL != "" {
 			logx.Infof("room api refused the room, resolved a stream url from the live page")
 			return []string{streamURL}, nil
 		}
 	}
 	return nil, ErrPrivateRoom
-}
-
-// signedLiveURLs reads the live room payload of the signed web UI endpoint and
-// reuses the same quality ordering as the webcast response.
-func (c *Client) signedLiveURLs(ctx context.Context, user string) ([]string, error) {
-	signed, err := c.signedRoomURL(ctx, user)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.get(ctx, signed, false)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("signed live room: %s", resp.Status)
-	}
-
-	var payload struct {
-		Data struct {
-			LiveRoom *struct {
-				Status     FlexString `json:"status"`
-				StreamData struct {
-					PullData struct {
-						StreamData string  `json:"stream_data"`
-						Options    Options `json:"options"`
-					} `json:"pull_data"`
-				} `json:"streamData"`
-			} `json:"liveRoom"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
-	}
-	if payload.Data.LiveRoom == nil {
-		return nil, ErrNotLive
-	}
-	info := &RoomInfo{Data: RoomData{
-		Status: payload.Data.LiveRoom.Status,
-		StreamURL: StreamURL{LiveCoreSDKData: LiveCoreSDKData{PullData: PullData{
-			StreamData: payload.Data.LiveRoom.StreamData.PullData.StreamData,
-			Options:    payload.Data.LiveRoom.StreamData.PullData.Options,
-		}}},
-	}}
-	return info.Candidates(), nil
 }

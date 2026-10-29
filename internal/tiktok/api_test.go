@@ -2,7 +2,6 @@ package tiktok
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -184,7 +183,7 @@ func TestLiveURLsRestrictedScrape(t *testing.T) {
 	}
 }
 
-func TestLiveURLsRestrictedScrapeFallbacks(t *testing.T) {
+func TestLiveURLsRestrictedWithoutFallback(t *testing.T) {
 	cases := []struct {
 		name string
 		user string
@@ -199,10 +198,6 @@ func TestLiveURLsRestrictedScrapeFallbacks(t *testing.T) {
 				switch r.URL.Path {
 				case "/webcast/room/info/":
 					writeBody(w, infoRestricted)
-				case "/tiktok/room/api/sign":
-					writeBody(w, `{"signed_url":"http://`+r.Host+`/signed"}`)
-				case "/signed":
-					writeBody(w, `{"data":{"liveRoom":null}}`)
 				default:
 					writeBody(w, tc.page)
 				}
@@ -265,20 +260,19 @@ func TestLiveURLsNoCandidatesIsEmptyNotError(t *testing.T) {
 	}
 }
 
-func signedMux(roomID string) *http.ServeMux {
+func liveMux(t *testing.T, roomID string) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api-live/room", func(w http.ResponseWriter, r *http.Request) {
-		writeBody(w, `{"data":{"user":{"roomId":"`+roomID+`"}}}`)
+	mux.HandleFunc("/api-live/user/room/", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("uniqueId"); got != "alice" {
+			t.Errorf("uniqueId = %q, want alice", got)
+		}
+		writeBody(w, `{"statusCode":0,"data":{"user":{"roomId":`+roomID+`}}}`)
 	})
 	return mux
 }
 
-func TestRoomIDForUserSignedURL(t *testing.T) {
-	mux := signedMux("701")
-	mux.HandleFunc("/tiktok/room/api/sign", func(w http.ResponseWriter, r *http.Request) {
-		writeBody(w, `{"signed_url":"http://`+r.Host+`/api-live/room?sig=1","signed_path":"/api-live/room"}`)
-	})
-	c := newTestClient(t, mux)
+func TestRoomIDForUser(t *testing.T) {
+	c := newTestClient(t, liveMux(t, `"701"`))
 	got, err := c.RoomIDForUser(t.Context(), "alice")
 	if err != nil {
 		t.Fatalf("RoomIDForUser: %v", err)
@@ -288,12 +282,8 @@ func TestRoomIDForUserSignedURL(t *testing.T) {
 	}
 }
 
-func TestRoomIDForUserSignedPath(t *testing.T) {
-	mux := signedMux("702")
-	mux.HandleFunc("/tiktok/room/api/sign", func(w http.ResponseWriter, r *http.Request) {
-		writeBody(w, `{"signed_path":"/api-live/room"}`)
-	})
-	c := newTestClient(t, mux)
+func TestRoomIDForUserNumericRoomID(t *testing.T) {
+	c := newTestClient(t, liveMux(t, `702`))
 	got, err := c.RoomIDForUser(t.Context(), "alice")
 	if err != nil {
 		t.Fatalf("RoomIDForUser: %v", err)
@@ -303,57 +293,26 @@ func TestRoomIDForUserSignedPath(t *testing.T) {
 	}
 }
 
-func TestRoomIDForUserEulerFallback(t *testing.T) {
-	var apiKeySent bool
-	mux := http.NewServeMux()
-	mux.HandleFunc("/tiktok/room/api/sign", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	})
-	mux.HandleFunc("/webcast/room_info", func(w http.ResponseWriter, r *http.Request) {
-		apiKeySent = len(r.Header.Values("X-Api-Key")) > 0
-		if r.URL.Query().Get("uniqueId") != "alice" {
-			t.Errorf("uniqueId = %q, want alice", r.URL.Query().Get("uniqueId"))
-		}
-		writeBody(w, `{"data":{"room_info":{"id":"703"}}}`)
-	})
-	c := newTestClient(t, mux)
-	got, err := c.RoomIDForUser(t.Context(), "alice")
-	if err != nil {
-		t.Fatalf("RoomIDForUser: %v", err)
-	}
-	if got != "703" {
-		t.Fatalf("roomID = %q, want 703", got)
-	}
-	if !apiKeySent {
-		t.Error("euler fallback must send the x-api-key header")
-	}
-}
-
 func TestRoomIDForUserErrors(t *testing.T) {
 	cases := []struct {
-		name  string
-		sign  string
-		body  string
-		euler string
-		want  error
+		name   string
+		status int
+		body   string
+		want   error
 	}{
-		{"waf page", `{"signed_path":"/api-live/room"}`, "Please wait", "", ErrWAF},
-		{"empty body", `{"signed_path":"/api-live/room"}`, "", "", ErrWAF},
-		{"no room id, euler empty", `{"signed_path":"/api-live/room"}`, `{"data":{"user":{"roomId":""}}}`, `{"data":{}}`, ErrRoomID},
+		{"waf page", http.StatusOK, "Please wait", ErrWAF},
+		{"waf stub", http.StatusOK, "<html>SlardarWAF</html>", ErrWAF},
+		{"forbidden", http.StatusForbidden, "", ErrWAF},
+		{"empty body", http.StatusOK, "", ErrWAF},
+		{"no room id", http.StatusOK, `{"statusCode":19881007,"msg":null,"data":{}}`, ErrRoomID},
+		{"unparsable", http.StatusOK, "<html>nope</html>", ErrRoomID},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			mux := http.NewServeMux()
-			mux.HandleFunc("/tiktok/room/api/sign", func(w http.ResponseWriter, r *http.Request) {
-				writeBody(w, tc.sign)
-			})
-			mux.HandleFunc("/api-live/room", func(w http.ResponseWriter, r *http.Request) {
+			c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
 				writeBody(w, tc.body)
-			})
-			mux.HandleFunc("/webcast/room_info", func(w http.ResponseWriter, r *http.Request) {
-				writeBody(w, tc.euler)
-			})
-			c := newTestClient(t, mux)
+			}))
 			if _, err := c.RoomIDForUser(t.Context(), "alice"); !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
@@ -394,9 +353,9 @@ func TestUserForRoomID(t *testing.T) {
 }
 
 func TestUserAndRoomFromURL(t *testing.T) {
-	mux := signedMux("704")
-	mux.HandleFunc("/tiktok/room/api/sign", func(w http.ResponseWriter, r *http.Request) {
-		writeBody(w, `{"signed_path":"/api-live/room"}`)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api-live/user/room/", func(w http.ResponseWriter, r *http.Request) {
+		writeBody(w, `{"statusCode":0,"data":{"user":{"roomId":"704"}}}`)
 	})
 	mux.HandleFunc("/@alice/live", func(w http.ResponseWriter, r *http.Request) {
 		writeBody(w, "<html>live page</html>")
@@ -431,10 +390,8 @@ func TestUserAndRoomFromURL(t *testing.T) {
 					t.Errorf("requested host %q, want www.tiktok.com", r.URL.Host)
 				}
 				body = "<html>live page</html>"
-			case "/tiktok/room/api/sign":
-				body = `{"signed_path":"/api-live/room"}`
-			case "/api-live/room":
-				body = `{"data":{"user":{"roomId":"704"}}}`
+			case "/api-live/user/room/":
+				body = `{"statusCode":0,"data":{"user":{"roomId":"704"}}}`
 			default:
 				t.Errorf("unexpected request %s", r.URL)
 			}
@@ -507,30 +464,22 @@ func TestContextCancellationIsHonoured(t *testing.T) {
 	}
 }
 
-// TestRestrictedLiveIsCapturable walks the exact chain the recorder takes for a
-// login-restricted room: TikTok answers 4003110 for the webcast room API, the
-// signed web UI endpoint still carries the stream manifest, and that url serves
-// media. A restricted live is only usable if all three steps line up, so assert
-// them together.
+// TestRestrictedLiveIsCapturable walks the chain the recorder takes for a
+// login-restricted room: the webcast room API answers 4003110, the public live
+// page still carries a stream url, and that url serves media.
 func TestRestrictedLiveIsCapturable(t *testing.T) {
 	stream := strings.Repeat("flv-frame-", 2048)
-	// JSON carries no HTML escaping; only the scraped page needs unescaping.
-	manifest := `{"data":{"origin":{"main":{"flv":"CDN/live.flv?sig=abc&t=1"}},"sd":{"main":{"flv":"CDN/live_sd.flv"}}}}`
-
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/webcast/room/check_alive/":
 			writeBody(w, `{"data":[{"alive":true}]}`)
 		case "/webcast/room/info/":
 			writeBody(w, infoRestricted)
-		case "/tiktok/room/api/sign":
-			writeBody(w, `{"signed_url":"http://`+r.Host+`/signed?unique_id=creator"}`)
-		case "/signed":
-			qualities := `[{"sdk_key":"origin","level":10},{"sdk_key":"sd","level":2}]`
-			escaped := strings.ReplaceAll(manifest, "CDN", "http://"+r.Host)
-			writeBody(w, `{"data":{"liveRoom":{"status":2,"streamData":{"pull_data":{"stream_data":`+
-				quoteJSON(t, escaped)+`,"options":{"qualities":`+qualities+`}}}}}}`)
-		case "/live.flv":
+		case "/@creator/live":
+			// HTML carries no JSON escaping; the scrape unescapes the entity.
+			cdn := "http://" + r.Host + "/live_or4.flv?sig=abc&amp;t=1"
+			writeBody(w, `<script>var p="`+cdn+`";</script>`)
+		case "/live_or4.flv":
 			writeBody(w, stream)
 		default:
 			t.Errorf("unexpected request %s", r.URL.Path)
@@ -550,8 +499,8 @@ func TestRestrictedLiveIsCapturable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LiveURLs: %v", err)
 	}
-	if len(urls) != 2 || !strings.HasSuffix(urls[0], "/live.flv?sig=abc&t=1") || !strings.HasSuffix(urls[1], "/live_sd.flv") {
-		t.Fatalf("candidates = %v, want the origin url first", urls)
+	if len(urls) != 1 || !strings.HasSuffix(urls[0], "/live_or4.flv?sig=abc&t=1") {
+		t.Fatalf("scraped urls = %v", urls)
 	}
 
 	body, err := c.OpenStream(ctx, urls[0])
@@ -566,46 +515,6 @@ func TestRestrictedLiveIsCapturable(t *testing.T) {
 	if string(got) != stream {
 		t.Fatalf("captured %d bytes, want %d", len(got), len(stream))
 	}
-}
-
-// TestRestrictedLiveFallsBackToPageScrape covers the second fallback: the signed
-// endpoint has no live room, so the public page is the only remaining source.
-func TestRestrictedLiveFallsBackToPageScrape(t *testing.T) {
-	stream := strings.Repeat("flv-frame-", 2048)
-	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/webcast/room/info/":
-			writeBody(w, infoRestricted)
-		case "/tiktok/room/api/sign":
-			writeBody(w, `{"signed_url":"http://`+r.Host+`/signed"}`)
-		case "/signed":
-			writeBody(w, `{"data":{"liveRoom":null}}`)
-		case "/@creator/live":
-			cdn := "http://" + r.Host + "/live_or4.flv?sig=abc&amp;t=1"
-			writeBody(w, `<script>var p="`+cdn+`";</script>`)
-		case "/live_or4.flv":
-			writeBody(w, stream)
-		default:
-			t.Errorf("unexpected request %s", r.URL.Path)
-		}
-	}))
-
-	urls, err := c.LiveURLs(t.Context(), "7123", "creator")
-	if err != nil {
-		t.Fatalf("LiveURLs: %v", err)
-	}
-	if len(urls) != 1 || !strings.HasSuffix(urls[0], "/live_or4.flv?sig=abc&t=1") {
-		t.Fatalf("scraped urls = %v", urls)
-	}
-}
-
-func quoteJSON(t *testing.T, raw string) string {
-	t.Helper()
-	encoded, err := json.Marshal(raw)
-	if err != nil {
-		t.Fatalf("marshal manifest: %v", err)
-	}
-	return string(encoded)
 }
 
 // TestManagedCookiesNeverSent pins the rule: hints TikTok computes per session

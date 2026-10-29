@@ -33,15 +33,12 @@ type Client struct {
 	filter  *cookieFilter
 	base    string
 	webcast string
-	euler   string
-	tikrec  string
 }
 
 // cookieHosts are the TikTok hosts that receive the configured cookies. The jar
 // scopes host-only cookies to the host they were set for, so seeding just
 // www.tiktok.com leaves the webcast API unauthenticated, which is exactly the
-// endpoint a login-gated room needs. Third-party hosts (the signing service, the
-// euler API) must not see the session.
+// endpoint a login-gated room needs. No other host sees the session.
 var cookieHosts = []string{"www.tiktok.com", "webcast.tiktok.com"}
 
 // New builds a client seeded with cookies (name to value) and, when proxy is
@@ -67,8 +64,6 @@ func New(proxy string, cookies map[string]string) *Client {
 		filter:  filter,
 		base:    "https://www.tiktok.com",
 		webcast: "https://webcast.tiktok.com",
-		euler:   "https://tiktok.eulerstream.com",
-		tikrec:  "https://tikrec.com",
 	}
 }
 

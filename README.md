@@ -115,10 +115,9 @@ form still filled in.
 
 Resolution and capture, against TikTok's own endpoints:
 
-1. `tikrec.com/tiktok/room/api/sign` returns a signed
-   `www.tiktok.com/api-live/user/room` URL whose `X-Bogus`/`X-Gnarly`
-   parameters TikTok accepts. If that service is down, the recorder falls back
-   to the unsigned `tiktok.eulerstream.com/webcast/room_info` endpoint.
+1. `www.tiktok.com/api-live/user/room` resolves the username to a room id. The
+   endpoint answers a Chrome-shaped request without `X-Bogus`, a cookie or a
+   signing service, so the lookup needs no third-party host.
 2. `webcast.tiktok.com/webcast/room/check_alive` establishes liveness before any
    room data is trusted, so an ended room that still advertises stale stream
    URLs is not recorded.
@@ -130,9 +129,9 @@ Resolution and capture, against TikTok's own endpoints:
    liveness between reconnects. An endpoint that delivers nothing is abandoned
    in favour of the next candidate.
 
-A `4003110` answer (login or region restriction) triggers two fallbacks in
-order: the signed web UI endpoint, which carries the same stream manifest, then
-scraping the public live page. See [Under the hood](#under-the-hood) for what is
+A `4003110` answer (login or region restriction) falls back to scraping the
+public live page. That page is usually a WAF stub, so a login-gated room
+normally needs cookies. See [Under the hood](#under-the-hood) for what is
 actually reachable today.
 
 ## Output files
@@ -176,8 +175,8 @@ exactly the endpoint a login-gated room needs. A missing file is fine.
 - Login-gated rooms are fatal in every mode: the run stops with
   `live is private, login required` and exit status 1 instead of polling a room
   no retry can unlock.
-- The signed lookup depends on `tikrec.com`; when it is down, lookups fall back
-  to an unsigned endpoint that TikTok sometimes answers with a WAF block.
+- Username lookup is a single first-party endpoint. If TikTok answers it with a
+  WAF block, pass `-room_id` or add `cookies.json`.
 - The update check only reports the latest tag. It never replaces the binary.
 - `-proxy` covers lookups, not the video download, which always goes direct so
   the transfer is not bottlenecked.
@@ -235,22 +234,18 @@ when the config mentions one.
 <details>
 <summary>Restricted lives: what the fallbacks actually reach</summary>
 
-A `4003110` answer means TikTok refuses the webcast room API for that room. The
-signed web UI endpoint still returns the ordinary manifest
-(`data.liveRoom.streamData.pull_data`), mapped onto the same best-first quality
-ordering. The public live page is the second fallback, scraping a `.flv`/`.m3u8`
-url out of the HTML.
+A `4003110` answer means TikTok refuses the webcast room API for that room, and
+cookies are the fix: with a valid `sessionid_ss` the same room records.
 
-That scrape is unreliable: TikTok answers `GET /@user/live` with a 1,485-byte
-SlardarWAF challenge stub that contains no stream urls, with or without a warmed
-cookie jar. A real restricted live (`@donut_ntp.42`, room `7701946275792554760`)
-showed the whole chain: `check_alive` says `alive:true`, `room/info` answers
-`4003110`, the signed endpoint returns the room with `status:2` but no
-`streamData` key, the live page is the WAF stub, and the Android webcast host
-answers `4003110` too. With a valid `sessionid_ss` the same room records.
+The only fallback without cookies is the public live page, scraping a
+`.flv`/`.m3u8` url out of the HTML. It is unreliable: TikTok answers
+`GET /@user/live` with a 1,485-byte SlardarWAF challenge stub that contains no
+stream urls, with or without a warmed cookie jar. A real restricted live
+(`@donut_ntp.42`, room `7701946275792554760`) showed the whole chain:
+`check_alive` says `alive:true`, `room/info` answers `4003110`, the live page is
+the WAF stub, and the Android webcast host answers `4003110` too.
 
-`TestRestrictedLiveIsCapturable` walks the offline chain; the signed fallback and
-the page scrape each have their own test.
+`TestRestrictedLiveIsCapturable` walks that chain against a fake network.
 
 </details>
 
@@ -259,7 +254,7 @@ the page scrape each have their own test.
 
 Recorded on 2026-10-29 against `@aljazeeraenglish` and `@tiktok`:
 
-- `-user` → sign → room id → liveness → capture:
+- `-user` → room lookup → liveness → capture:
   `aljazeeraenglish=20261029_*.mp4`, ffprobe `h264 1280x720 25fps + aac`,
   2.0 MB for 8.18 s.
 - 60 s cap with `-race`: exit 0, no data race, 62.19 s container, 1.93 Mbps,
@@ -285,8 +280,9 @@ Recorded on 2026-10-29 against `@aljazeeraenglish` and `@tiktok`:
   `updateRepo` is set at build time.
 - **Multi-user recordings are goroutines** sharing one process rather than
   forked processes, so one Ctrl-C reaches all of them.
-- **Both `signed_url` and `signed_path` are accepted** from the sign service;
-  the live response returns an absolute url.
+- **The username lookup is unsigned.** `api-live/user/room` answers without
+  `X-Bogus` as long as the request looks like a browser, so no sign service sits
+  between the recorder and TikTok.
 - **HTTP/1.1 only.** The Chrome hello advertises it deliberately; there is no
   HTTP/2 path.
 
@@ -307,7 +303,7 @@ server. Offline tests never touch the network.
 The `live` tag adds checks that only make sense against the real service: the JA4
 fingerprint is Chrome's and not `crypto/tls`'s, a Chrome hello completes against
 `www.tiktok.com`, a request survives the hand-rolled `CONNECT` tunnel, and the
-same signed room URL works through both TLS stacks.
+room lookup works through both TLS stacks.
 
 ## License
 
