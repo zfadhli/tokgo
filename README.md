@@ -105,6 +105,11 @@ two writes never share a line. Piping the output, setting `NO_COLOR`, or running
 under `tokgo tui` drops the colour and the motion: a spinner prints once as
 `o recording..` and the tags stay the same plain text.
 
+The `[INFO]` line that opens a capture names the room, how long it has been live
+(`· up 13:00`), and the stream title on the next line, dropping the uptime when
+TikTok's `create_time` is older than 24 hours because the room object is reused
+across broadcasts.
+
 Capture writes one MPEG-TS segment per connection: `aljazeeraenglish=20261028_172928.000.ts`,
 `.001.ts`, and so on. A new segment starts on every reconnect, because a
 reconnected FLV restarts its timestamps and appending it would make ffmpeg drop
@@ -299,7 +304,7 @@ signed endpoint became the primary fallback.
 
 Verified two ways:
 
-- `TestRestrictedLiveIsCapturable` walks the whole chain offline: `RoomAlive`
+- `TestRestrictedLiveIsCapturable` walks the whole chain offline: `RoomStatus`
   reports a restricted room alive, `LiveURLs` resolves the manifest through the
   signed endpoint and orders origin before sd, and `OpenStream` returns the
   media bytes. `TestRestrictedLiveFallsBackToPageScrape` covers the second path.

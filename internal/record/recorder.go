@@ -26,7 +26,7 @@ const (
 // API is the slice of the TikTok client a recording needs. Declared here, on
 // the consumer side, so tests can feed canned streams.
 type API interface {
-	RoomAlive(ctx context.Context, roomID string) (bool, error)
+	RoomStatus(ctx context.Context, roomID string) (tiktok.RoomStatus, error)
 	LiveURLs(ctx context.Context, roomID, user string) ([]string, error)
 	OpenStream(ctx context.Context, url string) (io.ReadCloser, error)
 }
@@ -183,11 +183,11 @@ func (r *Recorder) capture(ctx context.Context, sess *session, roomID, url strin
 		if ctx.Err() != nil || expired(deadline) {
 			return written, nil
 		}
-		alive, err := r.api.RoomAlive(ctx, roomID)
+		status, err := r.api.RoomStatus(ctx, roomID)
 		if ctx.Err() != nil {
 			return written, nil
 		}
-		if (err == nil && !alive) || errors.Is(err, tiktok.ErrNotLive) {
+		if (err == nil && !status.Live) || errors.Is(err, tiktok.ErrNotLive) {
 			return written, nil
 		}
 		if err != nil {

@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -39,7 +41,7 @@ func serveRoomInfo(body string) http.Handler {
 	})
 }
 
-func TestRoomAlive(t *testing.T) {
+func TestRoomStatus(t *testing.T) {
 	cases := []struct {
 		name  string
 		alive string
@@ -68,21 +70,73 @@ func TestRoomAlive(t *testing.T) {
 					t.Errorf("unexpected request %s", r.URL.Path)
 				}
 			}))
-			got, err := c.RoomAlive(t.Context(), "7123")
+			got, err := c.RoomStatus(t.Context(), "7123")
 			if err != nil {
-				t.Fatalf("RoomAlive: %v", err)
+				t.Fatalf("RoomStatus: %v", err)
 			}
-			if got != tc.want {
-				t.Errorf("RoomAlive = %v, want %v", got, tc.want)
+			if got.Live != tc.want {
+				t.Errorf("RoomStatus.Live = %v, want %v", got.Live, tc.want)
 			}
 		})
 	}
 }
 
-func TestRoomAliveEmptyRoomID(t *testing.T) {
+func TestRoomStatusEmptyRoomID(t *testing.T) {
 	c := New("", nil)
-	if _, err := c.RoomAlive(t.Context(), ""); !errors.Is(err, ErrNotLive) {
+	if _, err := c.RoomStatus(t.Context(), ""); !errors.Is(err, ErrNotLive) {
 		t.Fatalf("err = %v, want ErrNotLive", err)
+	}
+}
+
+func TestRoomStatusTitleAndUptime(t *testing.T) {
+	info := func(createTime string) string {
+		return `{"status_code":0,"data":{"status":2,"title":"Your budget questions answered","create_time":` +
+			createTime + `,"stream_url":{"flv_pull_url":{"FULL_HD1":"https://cdn.example/full.flv"}}}}`
+	}
+	cases := []struct {
+		name       string
+		info       string
+		wantUptime bool
+	}{
+		{"fresh create_time", info(strconv.FormatInt(time.Now().Add(-90*time.Second).Unix(), 10)), true},
+		{"missing create_time", info("0"), false},
+		{"stale create_time", info(strconv.FormatInt(time.Now().Add(-48*time.Hour).Unix(), 10)), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/webcast/room/check_alive/":
+					writeBody(w, `{"data":[{"alive":true}]}`)
+				case "/webcast/room/info/":
+					writeBody(w, tc.info)
+				default:
+					t.Errorf("unexpected request %s", r.URL.Path)
+				}
+			}))
+			status, err := c.RoomStatus(t.Context(), "7702058376456391427")
+			if err != nil {
+				t.Fatalf("RoomStatus: %v", err)
+			}
+			if !status.Live {
+				t.Fatal("a room with a stream must report live")
+			}
+			if want := "Your budget questions answered"; status.Title != want {
+				t.Errorf("Title = %q, want %q", status.Title, want)
+			}
+			if !tc.wantUptime {
+				if !status.StartedAt.IsZero() {
+					t.Errorf("StartedAt = %v, want zero", status.StartedAt)
+				}
+				return
+			}
+			if status.StartedAt.IsZero() {
+				t.Fatal("a fresh create_time must yield a start time")
+			}
+			if drift := status.StartedAt.Sub(time.Now().Add(-90 * time.Second)); drift > 5*time.Second || drift < -5*time.Second {
+				t.Errorf("StartedAt is %v off the 90s probe", drift)
+			}
+		})
 	}
 }
 
@@ -448,7 +502,7 @@ func TestContextCancellationIsHonoured(t *testing.T) {
 	}))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := c.RoomAlive(ctx, "7123"); err == nil {
+	if _, err := c.RoomStatus(ctx, "7123"); err == nil {
 		t.Fatal("cancelled context should surface an error")
 	}
 }
@@ -484,11 +538,11 @@ func TestRestrictedLiveIsCapturable(t *testing.T) {
 	}))
 
 	ctx := t.Context()
-	alive, err := c.RoomAlive(ctx, "7123")
+	status, err := c.RoomStatus(ctx, "7123")
 	if err != nil {
-		t.Fatalf("RoomAlive: %v", err)
+		t.Fatalf("RoomStatus: %v", err)
 	}
-	if !alive {
+	if !status.Live {
 		t.Fatal("a restricted room must report alive so the caller can try the fallback")
 	}
 

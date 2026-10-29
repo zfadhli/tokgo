@@ -155,17 +155,30 @@ func (r *Runner) once(ctx context.Context, user string) error {
 		return err
 	}
 
-	alive, err := r.lookup.RoomAlive(ctx, roomID)
-	if err == nil && !alive {
+	status, err := r.lookup.RoomStatus(ctx, roomID)
+	if err == nil && !status.Live {
 		err = tiktok.ErrNotLive
 	}
 	if err != nil {
 		return err
 	}
 
-	logx.Infof("@%s · room %s · LIVE", user, roomID)
+	logLive(user, roomID, status)
 
 	return r.capture(ctx, user, roomID)
+}
+
+// logLive announces the room, its uptime when TikTok's timestamp is recent, and
+// the stream title.
+func logLive(user, roomID string, status tiktok.RoomStatus) {
+	suffix := ""
+	if !status.StartedAt.IsZero() {
+		suffix = " · up " + ui.Clock(time.Since(status.StartedAt))
+	}
+	logx.Infof("@%s · room %s · LIVE%s", user, roomID, suffix)
+	if status.Title != "" {
+		logx.Infof("title %q", status.Title)
+	}
 }
 
 // capture records one session and hands it to Telegram when enabled.
@@ -196,10 +209,10 @@ func (r *Runner) automatic(ctx context.Context, user string) error {
 	for {
 		roomID, err := r.lookup.RoomIDForUser(ctx, user)
 		if err == nil {
-			var alive bool
-			alive, err = r.lookup.RoomAlive(ctx, roomID)
-			if err == nil && alive {
-				logx.Infof("@%s · room %s · LIVE", user, roomID)
+			var status tiktok.RoomStatus
+			status, err = r.lookup.RoomStatus(ctx, roomID)
+			if err == nil && status.Live {
+				logLive(user, roomID, status)
 				err = r.capture(ctx, user, roomID)
 			} else if err == nil {
 				err = tiktok.ErrNotLive

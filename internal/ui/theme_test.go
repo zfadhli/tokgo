@@ -89,3 +89,23 @@ func TestBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestClock(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{-5 * time.Second, "00:00"},
+		{0, "00:00"},
+		{41 * time.Second, "00:41"},
+		{13 * time.Minute, "13:00"},
+		{59*time.Minute + 59*time.Second, "59:59"},
+		{time.Hour + 2*time.Minute + 5*time.Second, "1:02:05"},
+		{10 * time.Hour, "10:00:00"},
+	}
+	for _, tc := range tests {
+		if got := Clock(tc.d); got != tc.want {
+			t.Errorf("Clock(%v) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}

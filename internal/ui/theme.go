@@ -117,6 +117,20 @@ func Duration(d time.Duration) string {
 	}
 }
 
+// Clock formats an elapsed time the way a stopwatch reads: 00:41, 13:00,
+// 1:02:05.
+func Clock(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	total := int(d / time.Second)
+	h, m, s := total/3600, total/60%60, total%60
+	if h > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%02d:%02d", m, s)
+}
+
 // Bytes formats a size in SI units with one decimal, dropping a trailing .0:
 // 912 MB, 182.4 GB.
 func Bytes(n int64) string {

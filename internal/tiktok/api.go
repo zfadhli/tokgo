@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"tokgo/internal/logx"
 )
@@ -25,18 +27,20 @@ var (
 const (
 	followMarker  = "Follow the creator to watch their LIVE"
 	privateMarker = "This account is private"
+	roomFresh     = 24 * time.Hour
 )
 
-// RoomAlive reports whether roomID is streaming right now. A restricted room
+// RoomStatus reports whether roomID is streaming right now, with the title and
+// (when it can be trusted) how long the room has been live. A restricted room
 // counts as alive so the caller surfaces the login/region error instead of a
 // misleading "not live".
-func (c *Client) RoomAlive(ctx context.Context, roomID string) (bool, error) {
+func (c *Client) RoomStatus(ctx context.Context, roomID string) (RoomStatus, error) {
 	if roomID == "" {
-		return false, ErrNotLive
+		return RoomStatus{}, ErrNotLive
 	}
 	resp, err := c.get(ctx, c.webcast+"/webcast/room/check_alive/?aid=1988&region=CH&room_ids="+url.QueryEscape(roomID)+"&user_is_login=true", false)
 	if err != nil {
-		return false, err
+		return RoomStatus{}, err
 	}
 	var alive struct {
 		Data []struct {
@@ -44,25 +48,41 @@ func (c *Client) RoomAlive(ctx context.Context, roomID string) (bool, error) {
 		} `json:"data"`
 	}
 	if err := decodeInto(resp, &alive); err != nil {
-		return false, err
+		return RoomStatus{}, err
 	}
 	if len(alive.Data) == 0 || !alive.Data[0].Alive {
-		return false, nil
+		return RoomStatus{}, nil
 	}
 
 	info, err := c.roomInfo(ctx, roomID)
 	if err != nil {
-		return false, err
+		return RoomStatus{}, err
 	}
+	status := RoomStatus{Title: info.Data.Title}
 	switch {
 	case info.restricted():
-		return true, nil
+		status.Live = true
 	case info.StatusCode != 0:
-		return false, nil
+		return RoomStatus{}, nil
 	case info.ended():
-		return false, nil
+		return RoomStatus{}, nil
+	default:
+		status.Live = info.hasStream()
 	}
-	return info.hasStream(), nil
+
+	// TikTok reuses a room object across broadcasts and live payloads carry
+	// start_time: 0, so an old create_time is the previous stream's start and
+	// would print nonsense uptime. Omit it rather than guess.
+	if status.Live {
+		t, _ := strconv.ParseInt(string(info.Data.CreateTime), 10, 64)
+		if t > 0 {
+			started := time.Unix(t, 0)
+			if time.Since(started) <= roomFresh {
+				status.StartedAt = started
+			}
+		}
+	}
+	return status, nil
 }
 
 // LiveURLs returns every CDN url for the room, best quality first.

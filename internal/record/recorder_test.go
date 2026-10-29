@@ -30,15 +30,16 @@ type fakeAPI struct {
 	opened []string
 }
 
-func (f *fakeAPI) RoomAlive(context.Context, string) (bool, error) {
+func (f *fakeAPI) RoomStatus(context.Context, string) (tiktok.RoomStatus, error) {
 	f.mu.Lock()
 	f.calls++
 	call := f.calls
 	f.mu.Unlock()
 	if f.alive == nil {
-		return true, nil
+		return tiktok.RoomStatus{Live: true}, nil
 	}
-	return f.alive(call)
+	live, err := f.alive(call)
+	return tiktok.RoomStatus{Live: live}, err
 }
 
 func (f *fakeAPI) LiveURLs(context.Context, string, string) ([]string, error) {

@@ -2,6 +2,7 @@ package tiktok
 
 import (
 	"strings"
+	"time"
 )
 
 // FlexString accepts a JSON number, string, or null and keeps its literal text.
@@ -28,9 +29,18 @@ type RoomInfo struct {
 
 // RoomData carries liveness plus the stream endpoints.
 type RoomData struct {
-	Status    FlexString `json:"status"`
-	Owner     Owner      `json:"owner"`
-	StreamURL StreamURL  `json:"stream_url"`
+	Status     FlexString `json:"status"`
+	Title      string     `json:"title"`
+	CreateTime FlexString `json:"create_time"`
+	Owner      Owner      `json:"owner"`
+	StreamURL  StreamURL  `json:"stream_url"`
+}
+
+// RoomStatus is what a liveness probe learned about a room.
+type RoomStatus struct {
+	Live      bool
+	Title     string
+	StartedAt time.Time // zero when the room's create_time is missing or stale
 }
 
 // Owner identifies who is broadcasting.
