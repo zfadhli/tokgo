@@ -1,0 +1,7 @@
+tokgo
+*.log
+*.log.*
+TK_*.mp4
+cookies.json
+telegram.json
+output/
