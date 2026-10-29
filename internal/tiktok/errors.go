@@ -20,9 +20,11 @@ var (
 )
 
 // transient reports whether a failed attempt is worth retrying on the next poll.
+// Login-gated errors are excluded: no amount of waiting unlocks a private room,
+// and polling one forever buries the instruction to add cookies.
 func transient(err error) bool {
 	for _, target := range []error{
-		ErrNotLive, ErrLiveURL, ErrUserUnknown, ErrPrivateRoom, ErrPrivateFollow, ErrWAF,
+		ErrNotLive, ErrLiveURL, ErrUserUnknown, ErrWAF,
 	} {
 		if errors.Is(err, target) {
 			return true
@@ -34,3 +36,22 @@ func transient(err error) bool {
 // Transient reports whether err is a recoverable "not live yet / try later"
 // condition, as opposed to a fatal configuration or access error.
 func Transient(err error) bool { return err != nil && transient(err) }
+
+// fatal lists the conditions no retry can fix: they need the operator to add
+// cookies, change region, or correct the arguments.
+func fatal(err error) bool {
+	for _, target := range []error{
+		ErrPrivateRoom, ErrPrivateAccount, ErrPrivateFollow,
+		ErrCountryBlocked, ErrCountryAuto, ErrCountryFollow,
+		ErrInvalidURL, ErrRoomID,
+	} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// Fatal reports whether err needs the operator to act rather than waiting for
+// the next poll.
+func Fatal(err error) bool { return err != nil && fatal(err) }

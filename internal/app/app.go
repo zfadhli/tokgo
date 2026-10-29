@@ -230,6 +230,9 @@ func (r *Runner) automatic(ctx context.Context, user string) error {
 				}
 				continue
 			}
+			if tiktok.Fatal(err) {
+				return err
+			}
 			logx.Errorf("connection problem: %v", err)
 			if !sleep(ctx, connectionBackoff) {
 				return nil

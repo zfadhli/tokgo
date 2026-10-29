@@ -76,7 +76,13 @@ working directory:
 ```
 
 A missing file is fine; TikTok's login walls are then reported per request. For
-private or login-restricted lives, supply the cookies.
+private or login-restricted lives, supply the cookies. `cookies.example.json`
+shows the shape, and `sessionid_ss` is the cookie that carries the session.
+
+Login-gated rooms are fatal in every mode: the run stops with
+`live is private, login required` and exit status 1 instead of polling a room no
+retry can unlock. Only genuinely retryable conditions (not live yet, empty CDN,
+WAF block, unknown user) keep the automatic loop alive.
 
 `telegram.json` for `-telegram`:
 
@@ -222,7 +228,12 @@ Verified two ways:
   media bytes. `TestRestrictedLiveFallsBackToPageScrape` covers the second path.
 - Against the real service, the signed fallback was checked directly:
   `TestSignedEndpointYieldsPlayableStream` resolved 3 candidate urls for a live
-  user and the first one served an FLV container. This IP is not WAF-flagged, so
-  a genuine `4003110` could not be provoked from here; the WAF path that *was*
-  hit earlier (`403` with an empty body) reports `ErrWAF` rather than being
-  mistaken for a dead room.
+  user and the first one served an FLV container.
+- A real restricted live was found (`@donut_ntp.42`, room `7701946275792554760`):
+  `check_alive` says `alive:true`, `room/info` answers `4003110` with an empty
+  prompt, the signed endpoint returns the room with `status:2` but **no
+  `streamData` key at all**, the live page is the SlardarWAF stub, and the
+  Android webcast host answers `4003110` too. TikTok withholds that manifest from
+  anonymous clients on every reachable endpoint, so the chain correctly ends in
+  `live is private, login required` rather than a wrong `not live`. Unlocking it
+  needs a logged-in `sessionid_ss`, which no amount of fallback code replaces.
