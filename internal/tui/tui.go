@@ -92,22 +92,23 @@ type Model struct {
 
 	settings settings
 
-	targets     []target
-	byName      map[string]int
-	list        []string // saved targets, in the order they were added
-	userPath    string   // where list persists; "" disables saving
-	restarting  []string // targets to start again once their run is gone
-	compIdx     int      // cycling index into the live completion set
-	logs        []logLine
-	started     time.Time
-	ended       time.Time
-	runInterval time.Duration // the in-flight run's poll interval, not next-run settings
-	finishing   bool
-	result      error
-	quit        bool
-	cancel      context.CancelFunc
-	ctx         context.Context
-	users       []string
+	targets      []target
+	byName       map[string]int
+	list         []string // saved targets, in the order they were added
+	userPath     string   // where list persists; "" disables saving
+	settingsPath string   // where the input-line knobs persist; "" disables saving
+	restarting   []string // targets to start again once their run is gone
+	compIdx      int      // cycling index into the live completion set
+	logs         []logLine
+	started      time.Time
+	ended        time.Time
+	runInterval  time.Duration // the in-flight run's poll interval, not next-run settings
+	finishing    bool
+	result       error
+	quit         bool
+	cancel       context.CancelFunc
+	ctx          context.Context
+	users        []string
 
 	input   textinput.Model
 	history []string
@@ -400,12 +401,53 @@ func (m *Model) addToRun(names []string) {
 	}
 }
 
-// loadSaved reads the target list and lists it, so the screen opens on what the
-// last session saved.
+// loadSaved reads the target list and the input-line settings, so the screen
+// opens on what the last session saved.
 func (m *Model) loadSaved() {
 	m.userPath = targetFile()
+	m.settingsPath = settingsFile()
 	m.list = loadTargets(m.userPath)
+	m.settings = m.savedSettings()
 	m.syncRows()
+}
+
+// savedSettings is the stored knobs with the limits the flags enforce applied,
+// so a hand-edited file cannot make a launch fail.
+func (m *Model) savedSettings() settings {
+	out := settings{interval: 3}
+	saved, err := readSettings(m.settingsPath)
+	if err != nil {
+		m.warn("settings.json: " + err.Error())
+		return out
+	}
+	out.once = saved.Once
+	out.duration = saved.Duration
+	out.interval = saved.Interval
+	out.output = saved.Output
+	out.proxy = saved.Proxy
+	out.telegram = saved.Telegram
+	if out.interval < 1 {
+		out.interval = 3
+	}
+	if out.duration < 0 {
+		out.duration = 0
+	}
+	return out
+}
+
+// saveSettings writes the knobs back after a command changes them.
+func (m *Model) saveSettings() {
+	err := writeSettings(m.settingsPath, storedSettings{
+		Once:     m.settings.once,
+		Duration: m.settings.duration,
+		Interval: m.settings.interval,
+		Output:   m.settings.output,
+		Proxy:    m.settings.proxy,
+		Telegram: m.settings.telegram,
+	})
+	if err != nil {
+		m.warn("cannot save the settings: " + err.Error())
+	}
 }
 
 // syncRows gives every saved name a row. Rows already on screen, running or
@@ -760,9 +802,11 @@ func (m *Model) command(line string) tea.Cmd {
 		m.setCookies(rest)
 	case "once":
 		m.settings.once = true
+		m.saveSettings()
 		m.nextRun("once")
 	case "wait":
 		m.settings.once = false
+		m.saveSettings()
 		m.nextRun("wait")
 	case "duration":
 		m.applySetting("-duration", rest, "duration", func(cfg config.Config) {
@@ -807,6 +851,7 @@ func (m *Model) applySetting(flag, raw, label string, set func(config.Config)) {
 		return
 	}
 	set(cfg)
+	m.saveSettings()
 	if label != "" {
 		m.nextRun(label)
 	}
@@ -826,7 +871,9 @@ func (m *Model) setTelegram(raw string) {
 		m.settings.telegram = false
 	default:
 		m.warn("telegram takes on or off")
+		return
 	}
+	m.saveSettings()
 }
 
 func (m *Model) drop(raw string) {

@@ -1469,3 +1469,112 @@ func TestIsUsername(t *testing.T) {
 		}
 	}
 }
+
+// TestSettingsSurviveTheSession is the promise /output makes: the next launch
+// already points at the directory this session chose.
+func TestSettingsSurviveTheSession(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const out = "/mnt/c/Users/envs4/Downloads/tiktok"
+
+	m := newModel()
+	m.loadSaved()
+	for _, line := range []string{
+		"/output " + out,
+		"/duration 45",
+		"/interval 7",
+		"/proxy socks5://127.0.0.1:1080",
+		"/telegram on",
+		"/once",
+	} {
+		submit(m, line)
+	}
+
+	next := newModel()
+	next.loadSaved()
+	want := settings{once: true, duration: 45, interval: 7, output: out, proxy: "socks5://127.0.0.1:1080", telegram: true}
+	if next.settings != want {
+		t.Fatalf("settings = %+v, want %+v", next.settings, want)
+	}
+	if got := next.argv([]string{"alpha"}); !slices.Contains(got, out) {
+		t.Fatalf("the next run's flags are missing the saved output: %q", got)
+	}
+
+	submit(next, "/output")
+	if next.settings.output != "" {
+		t.Fatalf("an empty /output must clear it: %+v", next.settings)
+	}
+	again := newModel()
+	again.loadSaved()
+	if again.settings.output != "" {
+		t.Fatalf("a cleared output must stay cleared: %+v", again.settings)
+	}
+}
+
+func TestSettingsFileRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "settings.json")
+	in := storedSettings{Output: "/mnt/c/x", Interval: 7, Telegram: true}
+	if err := writeSettings(path, in); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := readSettings(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got != in {
+		t.Fatalf("read back = %+v, want %+v", got, in)
+	}
+	if body, err := os.ReadFile(path); err != nil || !strings.HasSuffix(string(body), "\n") {
+		t.Fatalf("the file must end with a newline: %q %v", body, err)
+	}
+	if got, err := readSettings(filepath.Join(t.TempDir(), "missing.json")); err != nil || got != (storedSettings{}) {
+		t.Fatalf("a missing file is the defaults: %+v %v", got, err)
+	}
+	if got, err := readSettings(""); err != nil || got != (storedSettings{}) {
+		t.Fatalf("no path disables persistence: %+v %v", got, err)
+	}
+	if err := writeSettings("", in); err != nil {
+		t.Fatalf("writing without a path is a no-op: %v", err)
+	}
+}
+
+// TestSavedSettingsRespectTheFlagLimits keeps a hand-edited file from breaking
+// every launch.
+func TestSavedSettingsRespectTheFlagLimits(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "tokgo", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"interval": 0, "duration": -5, "output": "/tmp/rec"}`), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	m := newModel()
+	m.loadSaved()
+	want := settings{interval: 3, output: "/tmp/rec"}
+	if m.settings != want {
+		t.Fatalf("settings = %+v, want %+v", m.settings, want)
+	}
+}
+
+func TestBrokenSettingsFileFallsBackToTheDefaults(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "tokgo", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	m := newModel()
+	m.loadSaved()
+	if m.settings != (settings{interval: 3}) {
+		t.Fatalf("settings = %+v, want the defaults", m.settings)
+	}
+	if got := logText(m); !strings.Contains(got, "settings.json") {
+		t.Fatalf("the broken file needs a warning:\n%s", got)
+	}
+}

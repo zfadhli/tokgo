@@ -150,12 +150,14 @@ input shows what tab would fill.
 | `/help` | print the list |
 
 Settings changes apply to the next run and say so if one is in flight; nothing is
-restarted behind your back. `/restart` is the one command that does restart
-something, and only after the old capture has been remuxed. `up`/`down` walk the
-lines you submitted before and `esc` stops a run or clears the line. `/quit` is
-the only way out: Ctrl-C is not bound here, so a stray one cannot abandon a
-remux. Validation goes through the same parser the flags use, so a command
-cannot accept a combination the CLI would reject.
+restarted behind your back. The knobs are saved to
+`~/.config/tokgo/settings.json`, so `/output <dir>` is still set on the next
+launch. `/restart` is the one command that does restart something, and only
+after the old capture has been remuxed. `up`/`down` walk the lines you submitted
+before and `esc` stops a run or clears the line. `/quit` is the only way out:
+Ctrl-C is not bound here, so a stray one cannot abandon a remux. Validation goes
+through the same parser the flags use, so a command cannot accept a combination
+the CLI would reject.
 
 Below 60 columns the size column is dropped and the table keeps the name, phase
 and timer.
