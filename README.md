@@ -81,7 +81,7 @@ Each run opens with the wordmark, then a short header describing what it is
 about to do:
 
 ```
-tokgo v0.1.0 — TikTok LIVE recorder
+tokgo v0.1.1 — TikTok LIVE recorder
 https://github.com/zfadhli/tokgo · MIT License
 
   target  @aljazeeraenglish · wait for live, poll 3min

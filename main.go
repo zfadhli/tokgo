@@ -9,7 +9,7 @@ import (
 	"tokgo/internal/tui"
 )
 
-const version = "0.1.0"
+const version = "0.1.1"
 
 // Builds that are distributed through GitHub releases can set this; a plain
 // source build has nobody to ask, so the update check stays offline.
