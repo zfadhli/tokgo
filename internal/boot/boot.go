@@ -39,6 +39,21 @@ func ReadCookies(path string) map[string]string {
 	return cookies
 }
 
+// SaveCookies writes the flat cookie map back so a value typed in the TUI is
+// there on the next launch. 0600: these are session credentials.
+func SaveCookies(path string, cookies map[string]string) error {
+	body, err := json.MarshalIndent(cookies, "", "  ")
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		return err
+	}
+	// WriteFile keeps the mode of a file that already exists.
+	return os.Chmod(path, 0o600)
+}
+
 // CheckFFmpeg reports whether the ffmpeg binary the run will use is reachable.
 func CheckFFmpeg(path string) error {
 	if path == "" {
