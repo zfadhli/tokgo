@@ -54,7 +54,8 @@ func run(ctx context.Context, parsed Parsed, opts Options) error {
 
 // header prints the run's target and wiring below the banner.
 func header(cfg config.Config, users []string) {
-	fmt.Println("  " + ui.Label("target") + ui.Value(targetLine(cfg, users)))
+	target, mode := targetLine(cfg, users)
+	fmt.Println("  " + ui.Label("target") + ui.Value(target) + ui.Dim(" · "+mode))
 
 	ffmpegPath := cfg.FFmpegPath
 	if ffmpegPath == "" {
@@ -64,11 +65,11 @@ func header(cfg config.Config, users []string) {
 	if err != nil {
 		resolved = ffmpegPath
 	}
-	ffmpegLine := resolved
+	ffmpegLine := ui.Dim(resolved)
 	if version := boot.FFmpegVersion(resolved); version != "" {
-		ffmpegLine = version + " · " + resolved
+		ffmpegLine = ui.Value(version) + ui.Dim(" · "+resolved)
 	}
-	fmt.Println("  " + ui.Label("ffmpeg") + ui.Value(ffmpegLine))
+	fmt.Println("  " + ui.Label("ffmpeg") + ffmpegLine)
 
 	out, err := filepath.Abs(cfg.OutputDir)
 	if err != nil {
@@ -84,7 +85,8 @@ func header(cfg config.Config, users []string) {
 	fmt.Println()
 }
 
-func targetLine(cfg config.Config, users []string) string {
+// targetLine splits what to record from how, so only the target is highlighted.
+func targetLine(cfg config.Config, users []string) (string, string) {
 	target := "room " + cfg.RoomID
 	switch {
 	case cfg.URL != "":
@@ -99,7 +101,7 @@ func targetLine(cfg config.Config, users []string) string {
 	if cfg.Duration > 0 {
 		mode += fmt.Sprintf(", cap %dmin", cfg.Duration)
 	}
-	return target + " · " + mode
+	return target, mode
 }
 
 // cookieLine names the login cookie without printing it.

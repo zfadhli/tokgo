@@ -14,13 +14,12 @@ import (
 )
 
 var (
-	accentCol = lipgloss.Color("#fe2c55")
-	cyanCol   = lipgloss.Color("#25f4ee")
-	dimCol    = lipgloss.Color("#6b7280")
-	bodyCol   = lipgloss.Color("#e6e8eb")
-	okCol     = lipgloss.Color("#3ddc84")
-	warnCol   = lipgloss.Color("#ffd166")
-	badCol    = lipgloss.Color("#ff6b6b")
+	cyanCol = lipgloss.Color("#25f4ee")
+	dimCol  = lipgloss.Color("#6b7280")
+	bodyCol = lipgloss.Color("#e6e8eb")
+	okCol   = lipgloss.Color("#3ddc84")
+	warnCol = lipgloss.Color("#ffd166")
+	badCol  = lipgloss.Color("#ff6b6b")
 
 	labelStyle = lipgloss.NewStyle().Foreground(dimCol)
 	valueStyle = lipgloss.NewStyle().Foreground(bodyCol)
@@ -63,7 +62,7 @@ func Tag(kind, text string) string {
 	case "INFO":
 		style = lipgloss.NewStyle().Foreground(cyanCol)
 	case "START":
-		style = lipgloss.NewStyle().Foreground(accentCol).Bold(true)
+		style = lipgloss.NewStyle().Foreground(cyanCol).Bold(true)
 	case "STOP":
 		style = lipgloss.NewStyle().Foreground(warnCol).Bold(true)
 	case "DONE":
@@ -131,14 +130,14 @@ func Clock(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d", m, s)
 }
 
-// Bytes formats a size in SI units with one decimal, dropping a trailing .0:
-// 912 MB, 182.4 GB.
+// Bytes formats a size with one decimal in 1024-based units, the way df -h
+// and Finder report it, dropping a trailing .0: 869.8 MB, 846.9 GB.
 func Bytes(n int64) string {
 	units := [...]string{"B", "kB", "MB", "GB", "TB", "PB"}
 	v := float64(n)
 	i := 0
-	for v >= 1000 && i < len(units)-1 {
-		v /= 1000
+	for v >= 1024 && i < len(units)-1 {
+		v /= 1024
 		i++
 	}
 	return strings.TrimSuffix(strconv.FormatFloat(v, 'f', 1, 64), ".0") + " " + units[i]
