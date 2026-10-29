@@ -48,7 +48,7 @@ func inputFor(focus int) int {
 	return -1
 }
 
-var modeNames = []string{"wait for live", "record now"}
+var modeNames = []string{"wait for live", "record once"}
 
 // maxLogLines bounds the retained scrollback; the view only ever shows the tail.
 const maxLogLines = 2000
@@ -346,7 +346,7 @@ func (m *Model) start() tea.Cmd {
 func (m *Model) argv() []string {
 	var args []string
 	if m.mode == 1 {
-		args = append(args, "-now")
+		args = append(args, "-once")
 	}
 	target := strings.TrimSpace(m.inputs[0].Value())
 	switch {

@@ -48,7 +48,7 @@ func TestHelpListsEveryFlag(t *testing.T) {
 
 	help := out.String()
 	for _, name := range []string{
-		"url", "user", "room_id", "now", "automatic_interval", "proxy",
+		"url", "user", "room_id", "once", "automatic_interval", "proxy",
 		"output", "duration", "telegram", "ffmpeg-path", "no-update-check",
 	} {
 		if !strings.Contains(help, "--"+name) {

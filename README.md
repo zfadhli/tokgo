@@ -3,8 +3,8 @@
 Records TikTok live streams to mp4. A clean-room Go implementation of the CLI
 surface of an earlier Python implementation:
 the reference flags, no Python runtime, plus an interactive `tokgo tui` front
-end. It waits for an account to go live and keeps watching; `-now` records a
-single immediate attempt instead.
+end. It waits for an account to go live and keeps watching; `-once` records a
+single attempt instead.
 
 ```
 tokgo -u somecreator -o ./captures
@@ -26,7 +26,7 @@ go build -o tokgo .
 | `-url <URL>` | TikTok live URL (`https://www.tiktok.com/@name/live`, `https://vm.tiktok.com/...`) |
 | `-user <NAMES>`, `-u` | Username(s), comma separated, `@` optional |
 | `-room_id <ID>` | Numeric room id, bypasses username resolution |
-| `-now` | Record once right now instead of waiting for the account to go live |
+| `-once` | Record a single attempt instead of waiting for the account to go live |
 | `-automatic_interval <MIN>` | Minutes between liveness polls (default 5, minimum 1) |
 | `-duration <SECONDS>` | Stop after this many seconds per session |
 | `-output <DIR>`, `-o` | Output directory |
@@ -47,7 +47,7 @@ an error.
 tokgo tui
 ```
 
-An interactive form for the same run, built on Bubble Tea: a wait/record-now
+An interactive form for the same run, built on Bubble Tea: a wait/record-once
 chip, a single target field that accepts a username, a live URL or a numeric
 room id, plus duration, output directory, proxy and the Telegram toggle. The form is turned
 into argv and validated by the same `cli.Parse` the flags use, so it cannot
@@ -65,7 +65,7 @@ By default the run polls the user every `-automatic_interval` minutes and
 records each session it catches, forever. Each recording lasts until the stream
 ends, the room goes offline, `-duration` is reached, or you press Ctrl-C.
 
-**-now** resolves the room once, checks that it is live, records that one
+**-once** resolves the room once, checks that it is live, records that one
 session and exits. It is the mode to use when you already know the stream is
 up.
 

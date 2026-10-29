@@ -6,7 +6,7 @@ type Config struct {
 	URL               string
 	User              string
 	RoomID            string
-	Now               bool // record at once instead of waiting for the account to go live
+	Once              bool // record a single attempt instead of waiting for the account to go live
 	AutomaticInterval int  // minutes between liveness polls
 	Duration          int  // seconds; 0 means no cap
 	OutputDir         string

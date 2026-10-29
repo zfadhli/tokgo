@@ -68,7 +68,7 @@ func (r *Runner) Run(ctx context.Context, users []string) error {
 
 // loop picks the wait-for-live poll or the single immediate attempt.
 func (r *Runner) loop() func(context.Context, string) error {
-	if r.cfg.Now {
+	if r.cfg.Once {
 		return r.once
 	}
 	return r.automatic
@@ -139,7 +139,7 @@ func (r *Runner) countryGuard(ctx context.Context) error {
 	if !blocked {
 		return nil
 	}
-	if r.cfg.Now {
+	if r.cfg.Once {
 		return tiktok.ErrCountryBlocked
 	}
 	return tiktok.ErrCountryAuto

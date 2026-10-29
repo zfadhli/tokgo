@@ -28,7 +28,7 @@ var tikTokURL = regexp.MustCompile(`^.*www\.tiktok\.com.*$|^.*vm\.tiktok\.com.*$
 type flags struct {
 	url, user, roomID, proxy, output, ffmpeg string
 	interval, duration                       int
-	now, telegram, noUpdateCheck             bool
+	once, telegram, noUpdateCheck            bool
 }
 
 // bind registers the flags on fs and returns the struct that collects them.
@@ -37,7 +37,7 @@ func bind(fs *pflag.FlagSet) *flags {
 	fs.StringVar(&f.url, "url", "", "TikTok live room url")
 	fs.StringVarP(&f.user, "user", "u", "", "username, or a comma-separated list of usernames")
 	fs.StringVar(&f.roomID, "room_id", "", "TikTok room id")
-	fs.BoolVar(&f.now, "now", false, "record immediately instead of waiting for the account to go live")
+	fs.BoolVar(&f.once, "once", false, "record a single attempt instead of waiting for the account to go live")
 	fs.IntVar(&f.interval, "automatic_interval", 5, "minutes between liveness checks")
 	fs.StringVar(&f.proxy, "proxy", "", "proxy url for requests")
 	fs.StringVarP(&f.output, "output", "o", "", "directory for recordings")
@@ -81,7 +81,7 @@ func (f *flags) parsed() (Parsed, error) {
 			URL:               f.url,
 			User:              f.user,
 			RoomID:            f.roomID,
-			Now:               f.now,
+			Once:              f.once,
 			AutomaticInterval: f.interval,
 			Duration:          f.duration,
 			OutputDir:         f.output,

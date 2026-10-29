@@ -129,9 +129,9 @@ func TestParse(t *testing.T) {
 			want: want(config.Config{User: "x", AutomaticInterval: 5}, []string{"x"}, false),
 		},
 		{
-			name: "record now",
-			args: []string{"-user", "x", "-now", "-automatic_interval", "3"},
-			want: want(config.Config{User: "x", Now: true, AutomaticInterval: 3}, []string{"x"}, true),
+			name: "record once",
+			args: []string{"-user", "x", "-once", "-automatic_interval", "3"},
+			want: want(config.Config{User: "x", Once: true, AutomaticInterval: 3}, []string{"x"}, true),
 		},
 		{
 			name: "passthrough flags",

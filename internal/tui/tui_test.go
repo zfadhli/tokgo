@@ -45,14 +45,14 @@ func TestArgv(t *testing.T) {
 			want:   []string{"-url", "https://www.tiktok.com/@user/live", "-duration", "0"},
 		},
 		{
-			name:   "record now carries the rest of the form",
+			name:   "record once carries the rest of the form",
 			mode:   1,
 			target: "@someone",
 			dur:    "0",
 			upload: true,
 			out:    "/tmp/rec",
 			proxy:  "socks5://127.0.0.1:1080",
-			want: []string{"-now", "-user", "@someone", "-duration", "0", "-output", "/tmp/rec",
+			want: []string{"-once", "-user", "@someone", "-duration", "0", "-output", "/tmp/rec",
 				"-proxy", "socks5://127.0.0.1:1080", "-telegram"},
 		},
 	}
@@ -90,7 +90,7 @@ func TestFormViewMentionsMode(t *testing.T) {
 	m := newModel()
 	m.width, m.height = 100, 30
 	v := m.View()
-	for _, want := range []string{"tokgo", "wait for live", "record now", "Target", "Start"} {
+	for _, want := range []string{"tokgo", "wait for live", "record once", "Target", "Start"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("form view missing %q:\n%s", want, v)
 		}
