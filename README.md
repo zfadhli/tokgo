@@ -1,22 +1,64 @@
-# tokgo
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="100%"
+       alt="tokgo: a Go CLI that waits for a TikTok live stream, records it, and remuxes a playable mp4">
+</p>
 
-Records TikTok live streams to mp4. A clean-room Go rewrite of the same CLI
-surface: the reference flags, no Python runtime, plus an interactive `tokgo tui`
-front end. It waits for an account to go live and keeps watching; `-once` records a
-single attempt instead.
+**tokgo** records a TikTok live stream to a playable mp4. It waits for the
+account to go live, records every reconnect, and remuxes the capture with ffmpeg
+stream copy. One Go binary, no Python runtime, plus an interactive `tokgo tui`
+form for the same run.
 
-```
-tokgo -u somecreator -o ./captures
-```
+## Quick start
 
-## Requirements
-
-- Go 1.24+ to build
-- `ffmpeg` on `PATH` (or pass `-ffmpeg-path`)
+Needs Go 1.24+ and `ffmpeg` on `PATH`.
 
 ```bash
 go build -o tokgo .
+./tokgo -u somecreator -o ./captures
 ```
+
+That waits for the next stream and records it. If the account is live right
+now, add `-once` to record a single session and exit.
+
+```bash
+./tokgo -once -u somecreator -duration 30 -o ./captures
+```
+
+Press Ctrl-C once to stop cleanly: the capture is finalised and the mp4 is
+written. Press it twice to abort immediately and keep the raw `.ts` segments.
+
+## What a run looks like
+
+```text
+tokgo v0.1.1 — TikTok LIVE recorder
+https://github.com/zfadhli/tokgo · MIT License
+
+  target  @skynews · record once
+  ffmpeg  9.0.2 · /usr/bin/ffmpeg
+  output  /home/you/captures · 846.9 GB free
+  cookies sessionid_ss ••••b9c2
+
+[INFO]  @skynews · room 7702058376456391427 · LIVE · up 24:06
+[INFO]  title "Your budget questions answered"
+[START] skynews=20261029_202458
+⠧ recording.. (58s / cap 1min)
+[STOP]  duration cap reached · 1min
+⠋ remuxing..
+[DONE]  /home/you/captures/skynews=20261029_202458.mp4
+```
+
+The header names what will be recorded, which ffmpeg is used, where the file
+goes with the space left there, and which login cookie was loaded (masked, or
+`none · anonymous`).
+
+Log lines carry a fixed-width tag: cyan `INFO` and `START`, yellow `STOP`, green
+`DONE`, red `ERROR`. While it works, tokgo keeps one animated status line
+instead of scrolling: elapsed time against the duration cap during capture, then
+the remux, then a countdown while waiting for the next stream. A log line that
+arrives mid-spinner clears the line, prints, and redraws it.
+
+Piping the output, setting `NO_COLOR`, or running under `tokgo tui` drops colour
+and motion: a spinner prints once as `o recording..` and the tags stay plain.
 
 ## Flags
 
@@ -27,8 +69,8 @@ go build -o tokgo .
 | `-room_id <ID>` | Numeric room id, bypasses username resolution |
 | `-once` | Record a single attempt instead of waiting for the account to go live |
 | `-automatic_interval <MIN>` | Minutes between liveness polls (default 3, minimum 1) |
-| `-duration <MINUTES>` | Stop after this many minutes per session, 0 for no cap |
-| `-output <DIR>`, `-o` | Output directory |
+| `-duration <MINUTES>` | Total capture budget per session, 0 for no cap |
+| `-output <DIR>`, `-o` | Output directory (default: current directory) |
 | `-proxy <URL>` | HTTP proxy for lookups; the video transfer always goes direct |
 | `-telegram` | Upload the finished file to Telegram |
 | `-ffmpeg-path <PATH>` | Custom ffmpeg binary |
@@ -37,93 +79,78 @@ go build -o tokgo .
 The single-dash names match the reference CLI; the usual `--user` form works
 too, and `tokgo help` (or `-h`) prints the same list.
 
-Passing one of `-user`, `-room_id`, `-url` is required; passing more than one is
-an error.
-
-## TUI
-
-```
-tokgo tui
-```
-
-An interactive form for the same run, built on Bubble Tea: a wait/record-once
-chip, a single target field that accepts a username, a live URL or a numeric
-room id, plus duration, output directory, proxy and the Telegram toggle. The form is turned
-into argv and validated by the same `cli.Parse` the flags use, so it cannot
-accept a combination the CLI would reject or miss one it allows.
-
-Start swaps to a live view: target, mode, elapsed time against the `-duration`
-cap, and the tail of the runner's log. Ctrl-C stops the capture and lets the
-remux finish (a second press quits immediately), `r` starts a new run with the
-form still filled in. The UI owns stdout while it runs, so log lines are routed
-into the view; the debug log file is written as usual.
+Exactly one of `-user`, `-room_id`, `-url` is required. Several comma-separated
+usernames record concurrently in whichever mode is selected.
 
 ## Modes
 
 By default the run polls the user every `-automatic_interval` minutes and
-records each session it catches, forever. Each recording lasts until the stream
+records each session it catches, forever. A recording lasts until the stream
 ends, the room goes offline, `-duration` is reached, or you press Ctrl-C.
 
-**-once** resolves the room once, checks that it is live, records that one
-session and exits. It is the mode to use when you already know the stream is
-up.
+`-once` resolves the room once, checks that it is live, records that one session
+and exits. It is the mode to use when you already know the stream is up.
 
-Passing several comma-separated usernames records them concurrently, in
-whichever mode is selected.
+`-duration` is a total budget for one recording, not a per-connection timer, so
+a flapping stream cannot over-record.
 
-Ctrl-C once stops the capture, finalises the segments and runs the mp4 remux.
-Ctrl-C twice aborts immediately, leaving the `.ts` segments captured so far.
+## TUI
 
-## Output
-
-Each run opens with the wordmark, then a short header describing what it is
-about to do:
-
-```
-tokgo v0.1.1 — TikTok LIVE recorder
-https://github.com/zfadhli/tokgo · MIT License
-
-  target  @aljazeeraenglish · wait for live, poll 3min
-  ffmpeg  7.1.1 · /usr/bin/ffmpeg
-  output  /home/you/recordings · 182.4 GB free
-  cookies sessionid_ss ••••b9c2
+```bash
+tokgo tui
 ```
 
-The `target` line carries the URL, the `@` usernames or the room id, followed by
-the mode, with `, cap 4min` appended when `-duration` is set. `output` is the
-absolute directory and the space left on it, and `cookies` names the login cookie
-with all but its last four characters masked, or `none · anonymous`.
+An interactive form for the same run, built on Bubble Tea: a wait/record-once
+chip, one target field that accepts a username, a live URL or a numeric room id,
+then duration, output directory, proxy and the Telegram toggle. The form is
+turned into argv and validated by the same parser the flags use, so it cannot
+accept a combination the CLI would reject or miss one it allows.
 
-While it works, tokgo keeps one status line instead of scrolling. A spinner
-counts the elapsed time during the capture (`recording.. (4min 12s / cap
-30min)`), sits on the remux, and becomes the countdown while it waits for the
-next stream or retries a dropped connection. Log lines carry a coloured tag in a
-fixed column (`[INFO]`, `[START]`, `[STOP]`, `[DONE]`, `[WARN]`, `[ERROR]`). A log
-line arriving mid-spinner clears the spinner line, prints, then redraws it, so
-two writes never share a line. Piping the output, setting `NO_COLOR`, or running
-under `tokgo tui` drops the colour and the motion: a spinner prints once as
-`o recording..` and the tags stay the same plain text.
+Starting swaps to a live view: target, mode, elapsed time against the `-duration`
+cap, and the tail of the runner's log. Ctrl-C stops the capture and lets the
+remux finish; a second press quits immediately. `r` starts a new run with the
+form still filled in.
 
-The `[INFO]` line that opens a capture names the room, how long it has been live
-(`· up 13:00`), and the stream title on the next line, dropping the uptime when
-TikTok's `create_time` is older than 24 hours because the room object is reused
-across broadcasts.
+## How it works
 
-Capture writes one MPEG-TS segment per connection: `aljazeeraenglish=20261028_172928.000.ts`,
-`.001.ts`, and so on. A new segment starts on every reconnect, because a
-reconnected FLV restarts its timestamps and appending it would make ffmpeg drop
-that connection's video. When ffmpeg cannot start at all the capture goes
-straight to a raw `.flv` segment instead.
+Resolution and capture, against TikTok's own endpoints:
+
+1. `tikrec.com/tiktok/room/api/sign` returns a signed
+   `www.tiktok.com/api-live/user/room` URL whose `X-Bogus`/`X-Gnarly`
+   parameters TikTok accepts. If that service is down, the recorder falls back
+   to the unsigned `tiktok.eulerstream.com/webcast/room_info` endpoint.
+2. `webcast.tiktok.com/webcast/room/check_alive` establishes liveness before any
+   room data is trusted, so an ended room that still advertises stale stream
+   URLs is not recorded.
+3. `webcast.tiktok.com/webcast/room/info` yields the stream manifest. Each
+   quality carries a numeric `level`; endpoints are tried best-first (origin,
+   uhd, hd, sd, ld) for both FLV and HLS, then the legacy `flv_pull_url` tiers
+   and finally RTMP.
+4. The chosen endpoint is copied to disk through a 512 KiB buffer, re-checking
+   liveness between reconnects. An endpoint that delivers nothing is abandoned
+   in favour of the next candidate.
+
+A `4003110` answer (login or region restriction) triggers two fallbacks in
+order: the signed web UI endpoint, which carries the same stream manifest, then
+scraping the public live page. See [Under the hood](#under-the-hood) for what is
+actually reachable today.
+
+## Output files
+
+Capture writes one MPEG-TS segment per connection:
+`skynews=20261029_202458.000.ts`, `.001.ts`, and so on. A new segment starts on
+every reconnect, because a reconnected FLV restarts its timestamps and appending
+it would make ffmpeg drop that connection's video. When ffmpeg cannot start at
+all the capture goes straight to a raw `.flv` segment instead.
 
 At the end, or on Ctrl-C, the segments are remuxed in order with
 `ffmpeg -c copy` (stream copy, no quality loss) into
-`aljazeeraenglish=20261028_172928.mp4`, and the segments are removed.
+`skynews=20261029_202458.mp4`, and the segments are removed.
 
 If the remux fails the segments are kept, so no captured byte is lost, and a
-hard kill leaves the current `.ts` segment playable.
-
-If every advertised CDN endpoint yields fewer than 4 KiB, no file is left
-behind and the run fails with `unable to retrieve the live stream url`.
+hard kill leaves the current `.ts` segment playable. If every advertised CDN
+endpoint yields fewer than 4 KiB, no file is left behind and the run fails with
+`unable to retrieve the live stream url`.
 
 ## Cookies and Telegram
 
@@ -136,33 +163,7 @@ working directory. `sessionid_ss` is the one that carries a login:
 
 Cookies are sent to both `www.tiktok.com` and `webcast.tiktok.com`; the per-host
 cookie jar would otherwise leave the webcast API unauthenticated, which is
-exactly the endpoint a login-gated room needs. A missing file is fine; TikTok's
-login walls are then reported per request.
-
-`tt-target-idc` and `tt-target-idc-sign` are **ignored** if present. They are
-routing hints TikTok computes per session, so a value from a config file can only
-be stale. Measured against a login-gated room with a valid `sessionid_ss`:
-
-| `tt-target-idc` sent | `room/info` |
-| -------------------- | ----------- |
-| none                 | `0`, manifest present |
-| `useast2a`           | `4003110`, no manifest |
-| `useast1a`           | `0`, manifest present |
-| `useast8`            | `0`, manifest present |
-| `my2`                | `0`, manifest present |
-| `sg2`                | `0`, manifest present |
-| `eu1`                | `0`, manifest present |
-
-So the cookie is never needed, and `useast2a` — the value the reference project
-ships in its default `cookies.json` — is the one value that breaks room lookups.
-Guessing a datacentre is not worth a retry ladder: every value except that one
-behaves exactly like sending nothing. The recorder strips these cookies from
-every request and warns once when the config mentions one.
-
-Login-gated rooms are fatal in every mode: the run stops with
-`live is private, login required` and exit status 1 instead of polling a room no
-retry can unlock. Only genuinely retryable conditions (not live yet, empty CDN,
-WAF block, unknown user) keep the automatic loop alive.
+exactly the endpoint a login-gated room needs. A missing file is fine.
 
 `telegram.json` for `-telegram`:
 
@@ -170,153 +171,144 @@ WAF block, unknown user) keep the automatic loop alive.
 { "bot_token": "...", "chat_id": "123456", "caption": "optional" }
 ```
 
-## How it works
+## Limitations
 
-Resolution order, per mode, against TikTok's own endpoints:
+- Login-gated rooms are fatal in every mode: the run stops with
+  `live is private, login required` and exit status 1 instead of polling a room
+  no retry can unlock.
+- The signed lookup depends on `tikrec.com`; when it is down, lookups fall back
+  to an unsigned endpoint that TikTok sometimes answers with a WAF block.
+- The update check only reports the latest tag. It never replaces the binary.
+- `-proxy` covers lookups, not the video download, which always goes direct so
+  the transfer is not bottlenecked.
 
-1. `POST`-free lookups only: `tikrec.com/tiktok/room/api/sign` returns a signed
-   `www.tiktok.com/api-live/user/room` URL whose `X-Bogus`/`X-Gnarly`
-   parameters TikTok accepts. If that service is down, the recorder falls back
-   to the unsigned `tiktok.eulerstream.com/webcast/room_info` endpoint.
-2. `webcast.tiktok.com/webcast/room/check_alive` establishes liveness before
-   any room data is trusted, so an ended room that still advertises stale
-   stream URLs is not recorded.
-3. `webcast.tiktok.com/webcast/room/info` yields the stream manifest. Each
-   quality carries a numeric `level`; endpoints are tried best-first (origin,
-   uhd, hd, sd, ld) for both FLV and HLS, then the legacy `flv_pull_url` tiers
-   and finally RTMP.
-4. The chosen endpoint is copied to disk through a 512 KiB buffer, re-checking
-   liveness between reconnects. An endpoint that delivers nothing is abandoned
-   in favour of the next candidate.
+## Under the hood
 
-When TikTok answers `status_code 4003110` (WAF or region restriction) the
-recorder falls back to the signed web UI endpoint, which carries the same stream
-manifest, and only then to scraping the public live page.
-
-## TLS impersonation and proxies
+<details>
+<summary>TLS impersonation and proxies</summary>
 
 TikTok's WAF fingerprints the TLS handshake, so every connection is made with a
 Chrome ClientHello via [utls](https://github.com/refraction-networking/utls)
 instead of Go's `crypto/tls`. Server-observed fingerprints:
 
-| Client                       | JA4                                      |
-| ---------------------------- | ---------------------------------------- |
-| Go `crypto/tls`              | `t13d1311h2_f57a46bbacb6_e7c285222651`   |
-| this tool (utls, Chrome 120) | `t13d1516h1_8daaf6152771_02713d6af862`   |
+| Client | JA4 |
+| ------ | --- |
+| Go `crypto/tls` | `t13d1311h2_f57a46bbacb6_e7c285222651` |
+| this tool (utls, Chrome 120) | `t13d1516h1_8daaf6152771_02713d6af862` |
 
-The second value carries Chrome's cipher and extension hashes (`8daaf6152771`,
-`02713d6af862`). Three deliberate details:
+The profile is pinned to `HelloChrome_120` rather than `HelloChrome_Auto`: Auto
+tracks the newest Chrome, sends post-quantum key shares that some middleboxes
+drop, and drifts away from the `User-Agent` silently. ALPN is narrowed to
+`http/1.1`, because utls presets ignore `Config.NextProtos` and a server would
+otherwise agree on `h2` while Go's HTTP/1.1 transport talked past it.
 
-- The profile is pinned to `HelloChrome_120` rather than `HelloChrome_Auto`.
-  Auto tracks the newest Chrome, which sends post-quantum key shares that some
-  middleboxes drop, and it drifts away from the `User-Agent` silently. The
-  header set is Chrome 120 to match.
-- ALPN is narrowed to `http/1.1`. utls presets carry their own `h2, http/1.1`
-  list and ignore `Config.NextProtos`; left alone, a server would agree on `h2`
-  while Go's HTTP/1.1 transport talked past it. The reference tool forces
-  HTTP/1.1 for the same reason.
-- The proxy is tunnelled inside the dialer, with `Transport.Proxy` left nil.
-  `http.Transport` ignores `DialTLSContext` for proxied requests, so a proxied
-  run would otherwise silently fall back to Go's fingerprint. `-proxy` therefore
-  gets impersonation too, including `Basic` credentials in the `CONNECT`.
+The proxy is tunnelled inside the dialer with `Transport.Proxy` left nil:
+`http.Transport` ignores `DialTLSContext` for proxied requests, so a proxied run
+would silently fall back to Go's fingerprint. `-proxy` therefore gets
+impersonation too, including `Basic` credentials in the `CONNECT`.
 
-## Divergences from the Python original
+</details>
 
-Deliberate, and each one is a decision rather than an omission:
+<details>
+<summary>Stale <code>tt-target-idc</code> cookies</summary>
 
-- **Telegram uses the Bot API**, not MTProto. A user-account client would mean a
-  multi-megabyte MTProto dependency and a session store; a bot token plus
-  `sendDocument` covers the same need in ~90 lines.
-- **`-duration` is a total budget** for one recording, not a per-connection
-  timer. The original resets the timer on every reconnect, so a flapping stream
-  over-records.
-- **The update check does not self-replace.** The original downloads a zip and
-  overwrites its own source tree. A compiled binary has nothing to overwrite, so
-  the check only reports the latest tag, and only when `updateRepo` is set at
-  build time.
-- **Multi-user recordings are goroutines** sharing one process
-  rather than forked processes, so one Ctrl-C reaches all of them.
-- **`signed_url` is honoured.** The live tikrec response returns a `signed_url`
-  (absolute); the Python code looks for `signed_path` and would build a broken
-  URL. Both keys are accepted here.
-- **HTTP/1.1 only.** The reference also forces `http_version="v1"`; there is no
-  HTTP/2 path here.
+`tt-target-idc` and `tt-target-idc-sign` are ignored if present. They are routing
+hints TikTok computes per session, so a value from a config file can only be
+stale. Measured against a login-gated room with a valid `sessionid_ss`:
+
+| `tt-target-idc` sent | `room/info` |
+| -------------------- | ----------- |
+| none | `0`, manifest present |
+| `useast2a` | `4003110`, no manifest |
+| `useast1a` | `0`, manifest present |
+| `useast8` | `0`, manifest present |
+| `my2` | `0`, manifest present |
+| `sg2` | `0`, manifest present |
+| `eu1` | `0`, manifest present |
+
+Every value except `useast2a` behaves like sending nothing, and that one breaks
+room lookups. The recorder strips both cookies from every request and warns once
+when the config mentions one.
+
+</details>
+
+<details>
+<summary>Restricted lives: what the fallbacks actually reach</summary>
+
+A `4003110` answer means TikTok refuses the webcast room API for that room. The
+signed web UI endpoint still returns the ordinary manifest
+(`data.liveRoom.streamData.pull_data`), mapped onto the same best-first quality
+ordering. The public live page is the second fallback, scraping a `.flv`/`.m3u8`
+url out of the HTML.
+
+That scrape is unreliable: TikTok answers `GET /@user/live` with a 1,485-byte
+SlardarWAF challenge stub that contains no stream urls, with or without a warmed
+cookie jar. A real restricted live (`@donut_ntp.42`, room `7701946275792554760`)
+showed the whole chain: `check_alive` says `alive:true`, `room/info` answers
+`4003110`, the signed endpoint returns the room with `status:2` but no
+`streamData` key, the live page is the WAF stub, and the Android webcast host
+answers `4003110` too. With a valid `sessionid_ss` the same room records.
+
+`TestRestrictedLiveIsCapturable` walks the offline chain; the signed fallback and
+the page scrape each have their own test.
+
+</details>
+
+<details>
+<summary>Verified against the live service</summary>
+
+Recorded on 2026-10-29 against `@aljazeeraenglish` and `@tiktok`:
+
+- `-user` → sign → room id → liveness → capture:
+  `aljazeeraenglish=20261029_*.mp4`, ffprobe `h264 1280x720 25fps + aac`,
+  2.0 MB for 8.18 s.
+- 60 s cap with `-race`: exit 0, no data race, 62.19 s container, 1.93 Mbps,
+  15 MB.
+- `-url` and `-room_id` resolve to the same room and record.
+- Ctrl-C once finalised and remuxed the capture; default mode recorded, then
+  waited for the next poll.
+- Multi-user: one live and one offline user ran concurrently; the live one
+  landed, the dead one reported once with its `@name`, exit status 1.
+- TLS impersonation reported JA4 `t13d1516h1_8daaf6152771_02713d6af862` by
+  `tls.peet.ws`; `www.tiktok.com` negotiated `http/1.1` with that hello.
+- Error paths: not-live, invalid URL, mutually exclusive flags, and TikTok's WAF
+  answer (`403` with an empty body) each report one clear message.
+
+</details>
+
+## Design notes
+
+- **`-duration` is a total budget** for one recording. A per-connection timer
+  would reset on every reconnect, so a flapping stream would over-record.
+- **The update check does not self-replace.** A compiled binary has nothing to
+  overwrite, so the check only reports the latest tag, and only when
+  `updateRepo` is set at build time.
+- **Multi-user recordings are goroutines** sharing one process rather than
+  forked processes, so one Ctrl-C reaches all of them.
+- **Both `signed_url` and `signed_path` are accepted** from the sign service;
+  the live response returns an absolute url.
+- **HTTP/1.1 only.** The Chrome hello advertises it deliberately; there is no
+  HTTP/2 path.
 
 ## Tests
 
 ```bash
-go test ./...          # offline: fake network, no ffmpeg, no TikTok
+go test ./...              # offline: fake network, no ffmpeg, no TikTok
 go test -race ./...
 go test -tags live ./...   # real TikTok, real fingerprints, real proxy tunnel
 ```
 
 Unit tests cover the quality ordering, the CLI validation matrix, the recorder
 fallback and stop logic (with a fake network), ffmpeg argument construction, the
-Telegram multipart request, the `CONNECT` tunnel framing (including bytes a
-proxy sends in the same packet as its `200`), and a utls handshake against a Go
-TLS server. Offline tests never touch the network.
+Telegram multipart request, the `CONNECT` tunnel framing (including bytes a proxy
+sends in the same packet as its `200`), and a utls handshake against a Go TLS
+server. Offline tests never touch the network.
 
-The `live` tag adds four checks that only make sense against the real service:
-the JA4 fingerprint is Chrome's and not `crypto/tls`'s, a Chrome hello completes
-against `www.tiktok.com`, a request survives the hand-rolled `CONNECT` tunnel to
-TikTok, and the same signed room URL works through both TLS stacks.
+The `live` tag adds checks that only make sense against the real service: the JA4
+fingerprint is Chrome's and not `crypto/tls`'s, a Chrome hello completes against
+`www.tiktok.com`, a request survives the hand-rolled `CONNECT` tunnel, and the
+same signed room URL works through both TLS stacks.
 
-## Verified against the live service
+## License
 
-Recorded on 2026-10-29 against `@aljazeeraenglish` and `@tiktok`:
-
-- `-user` → tikrec sign → room id → liveness → capture:
-  `aljazeeraenglish=20261029_*.mp4`, ffprobe `h264 1280x720 25fps + aac`,
-  2.0 MB for 8.18 s.
-- 60 s cap with `-race`: exit 0, no data race, 62.19 s container (the CDN pushes
-  roughly 2 s of buffered media on connect), 1.93 Mbps, 15 MB.
-- `-url`, `-room_id`: both resolve to the same room and record.
-- Ctrl-C once: capture finalised, segments remuxed into the `.mp4`, segments
-  removed.
-- Default mode: records, then reports the wait before the next poll.
-- Multi-user: both users run concurrently, one live one not; the live one lands,
-  the dead one is reported once with its `@name` prefix, exit status 1.
-- TLS impersonation: JA4 `t13d1516h1_8daaf6152771_02713d6af862` reported by
-  `tls.peet.ws`, against `t13d1311h2_f57a46bbacb6_e7c285222651` for `crypto/tls`;
-  `www.tiktok.com` negotiates `http/1.1` with that hello; a capture re-taken
-  through the new transport produced 3.4 MB / 14.2 s.
-- Error paths: not-live, invalid URL, mutually exclusive flags, and TikTok's WAF
-  answer (`403` with an empty body) all report a single clear message.
-
-### Restricted lives
-
-A `4003110` answer means TikTok refuses the webcast room API for that room
-(login or region restriction). Two fallbacks are tried, in this order:
-
-1. **The signed web UI endpoint.** `tikrec.com/tiktok/room/api/sign` signs a
-   `www.tiktok.com/api-live/user/room` request, which returns the same stream
-   manifest the webcast API would have (`data.liveRoom.streamData.pull_data`).
-   The recorder maps it onto the ordinary quality ordering, so a restricted room
-   gets the same best-first CDN list as any other.
-2. **The public live page**, scraping a `.flv`/`.m3u8` url out of the HTML.
-
-The second is now unreliable: TikTok answers `GET /@user/live` with a 1,485-byte
-SlardarWAF challenge stub that contains no stream urls, with or without a warmed
-cookie jar. The reference tool relies on that scrape alone, which means its
-restricted-LIVE support is effectively dead against the current site. Hence the
-signed endpoint became the primary fallback.
-
-Verified two ways:
-
-- `TestRestrictedLiveIsCapturable` walks the whole chain offline: `RoomStatus`
-  reports a restricted room alive, `LiveURLs` resolves the manifest through the
-  signed endpoint and orders origin before sd, and `OpenStream` returns the
-  media bytes. `TestRestrictedLiveFallsBackToPageScrape` covers the second path.
-- Against the real service, the signed fallback was checked directly:
-  `TestSignedEndpointYieldsPlayableStream` resolved 3 candidate urls for a live
-  user and the first one served an FLV container.
-- A real restricted live was found and recorded (`@donut_ntp.42`, room
-  `7701946275792554760`):
-  `check_alive` says `alive:true`, `room/info` answers `4003110` with an empty
-  prompt, the signed endpoint returns the room with `status:2` but **no
-  `streamData` key at all**, the live page is the SlardarWAF stub, and the
-  Android webcast host answers `4003110` too. TikTok withholds that manifest from
-  anonymous clients on every reachable endpoint, so the chain correctly ends in
-  `live is private, login required` rather than a wrong `not live`. With a valid
-  `sessionid_ss` the same room records (1.0 MB, 6 s, h264 + aac), and the run
-  logs the one-off retry that drops the stale `tt-target-idc` cookie.
+MIT. See [LICENSE](LICENSE).
