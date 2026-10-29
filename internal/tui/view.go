@@ -224,6 +224,12 @@ func (m *Model) logTail(n int) []string {
 
 func markers(level string) (string, lipgloss.Style) {
 	switch level {
+	case "START":
+		return "▶", lipgloss.NewStyle().Foreground(cyan)
+	case "STOP":
+		return "■", lipgloss.NewStyle().Foreground(warnCol)
+	case "DONE":
+		return "✓", lipgloss.NewStyle().Foreground(okCol)
 	case "WARN":
 		return "!", lipgloss.NewStyle().Foreground(warnCol)
 	case "ERROR":

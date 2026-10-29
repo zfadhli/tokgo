@@ -1,5 +1,5 @@
-// Package logx is the process logger: INFO to stdout, warnings and errors to
-// stderr, and a rotating debug log file for post-mortems.
+// Package logx is the process logger: tagged lines to stdout, warnings and
+// errors to stderr, and a rotating debug log file for post-mortems.
 package logx
 
 import (
@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"tokgo/internal/ui"
 )
 
 const (
@@ -26,11 +28,12 @@ var (
 
 // SetSink diverts the console copies of every log line to f, keeping the debug
 // file untouched. It exists so a full-screen UI can own stdout. A nil f
-// restores the normal console output.
+// restores the normal console output, and the rendered styles with it.
 func SetSink(f func(level, text string)) {
 	mu.Lock()
 	sinkFn = f
 	mu.Unlock()
+	ui.SetQuiet(f != nil)
 }
 
 // Init opens the debug log, rotating it when it grows past 5 MiB and keeping
@@ -81,35 +84,37 @@ func Close() {
 }
 
 func write(level, format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
+	text := trimNewline(fmt.Sprintf(format, args...))
 	now := time.Now().Format("2006-01-02 15:04:05")
 
 	mu.Lock()
 	sink := sinkFn
+	spin := active
+	if spin != nil {
+		fmt.Fprint(os.Stdout, "\r\x1b[K")
+	}
 
 	if sink == nil {
 		switch level {
-		case "INFO":
-			fmt.Fprintf(os.Stdout, "[*] %s - %s", now, msg)
-			if len(msg) == 0 || msg[len(msg)-1] != '\n' {
-				fmt.Fprintln(os.Stdout)
-			}
+		case "DEBUG":
 		case "WARN", "ERROR":
-			fmt.Fprintf(os.Stderr, "[!] %s - %s", now, msg)
-			if len(msg) == 0 || msg[len(msg)-1] != '\n' {
-				fmt.Fprintln(os.Stderr)
-			}
+			fmt.Fprintln(os.Stderr, ui.Tag(level, text))
+		default:
+			fmt.Fprintln(os.Stdout, ui.Tag(level, text))
 		}
+	}
+	if spin != nil {
+		spin.drawLocked()
 	}
 
 	if file == nil {
 		mu.Unlock()
 		if sink != nil {
-			sink(level, trimNewline(msg))
+			sink(level, text)
 		}
 		return
 	}
-	line := fmt.Sprintf("%s [%s] %s\n", now, level, trimNewline(msg))
+	line := fmt.Sprintf("%s [%s] %s\n", now, level, text)
 	if size+int64(len(line)) >= maxBytes {
 		rotateLocked()
 	}
@@ -121,7 +126,7 @@ func write(level, format string, args ...any) {
 	mu.Unlock()
 
 	if sink != nil {
-		sink(level, trimNewline(msg))
+		sink(level, text)
 	}
 }
 
@@ -143,3 +148,7 @@ func Errorf(format string, args ...any) { write("ERROR", format, args...) }
 
 // Debugf logs to the debug file only.
 func Debugf(format string, args ...any) { write("DEBUG", format, args...) }
+
+// Step logs a lifecycle line: the console shows the kind's tag, the sink gets
+// the kind as its level, and the debug file records it like any other line.
+func Step(kind, format string, args ...any) { write(kind, format, args...) }
