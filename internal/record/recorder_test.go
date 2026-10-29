@@ -161,6 +161,46 @@ func TestRecordFallsThroughEmptyCandidate(t *testing.T) {
 	assertOnlyRecording(t, dir, path)
 }
 
+// A candidate under minStreamBytes is thrown away whole. Its segment must leave
+// the concat list too: a truncated segment makes the remux fail and costs the
+// whole recording.
+func TestRecordDiscardsSegmentsFromASubThresholdCandidate(t *testing.T) {
+	short := bytes.Repeat([]byte("junk"), 25)
+	payload := streamBytes()
+	bodies := map[string]*bytes.Reader{
+		"url-short": bytes.NewReader(short),
+		"url-good":  bytes.NewReader(payload),
+	}
+	api := &fakeAPI{
+		urls: []string{"url-short", "url-good"},
+		open: func(_ context.Context, url string) (io.ReadCloser, error) {
+			return io.NopCloser(bodies[url]), nil
+		},
+	}
+	stub, _ := ffmpegStub(t, "")
+	dir := t.TempDir()
+	rec := New(api, Options{OutputDir: dir, FFmpegPath: stub})
+
+	path, err := collect(t, rec, context.Background())
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if !strings.HasSuffix(path, ".mp4") {
+		t.Fatalf("Record returned %q, want the converted path", path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("file holds %d bytes, want only the accepted stream's %d", len(got), len(payload))
+	}
+	if junk, err := filepath.Glob(filepath.Join(dir, "TK_*.000.*")); err != nil || len(junk) != 0 {
+		t.Fatalf("left %v behind, %v, want the discarded segment removed", junk, err)
+	}
+	assertOnlyRecording(t, dir, path)
+}
+
 func TestRecordAllCandidatesEmpty(t *testing.T) {
 	dir := t.TempDir()
 	api := &fakeAPI{
