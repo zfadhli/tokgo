@@ -1,6 +1,6 @@
 <p align="center">
   <img src="./assets/readme/hero.svg" width="100%"
-       alt="tokgo: a Go CLI that waits for a TikTok live stream, records it, and remuxes a playable mp4">
+       alt="tokgo: a Go CLI and one-screen monitor that records several TikTok live streams at once, targets split into idle, polling and live columns">
 </p>
 
 **tokgo** records a TikTok live stream to a playable mp4. It waits for the

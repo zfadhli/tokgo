@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg"
-     width="1200" height="400" viewBox="0 0 1200 400"
+     width="1200" height="636" viewBox="0 0 1200 636"
      role="img" aria-labelledby="heroTitle heroDesc">
-  <title id="heroTitle">tokgo — record a TikTok live stream to mp4</title>
-  <desc id="heroDesc">The tokgo wordmark beside a terminal session that waits for a live room, records it, remuxes the segments, and reports the finished mp4.</desc>
+  <title id="heroTitle">tokgo — record several TikTok live streams at once</title>
+  <desc id="heroDesc">The tokgo wordmark above a terminal session: the one-screen monitor with its targets in three columns, idle, polling and live, two of them recording, the runner's log under them, and the input line completing a /stop command.</desc>
 
   <defs>
     <style>
@@ -11,40 +11,50 @@
     </style>
   </defs>
 
-  <rect width="1200" height="400" fill="#08090b"/>
+  <rect width="1200" height="636" fill="#08090b"/>
 
   <!-- title block -->
   <g id="title-block">
-    <text class="mono" x="56" y="72" font-size="17" letter-spacing="3.2" fill="#25f4ee">TIKTOK LIVE → MP4</text>
+    <text class="mono" x="76" y="58" font-size="16" letter-spacing="3.2" fill="#25f4ee">TIKTOK LIVE → MP4</text>
 
-    <text class="mono" x="56" y="188" font-size="100" font-weight="700" fill="#e6e8eb">tokgo</text>
-    <text class="mono" x="378" y="188" font-size="20" fill="#8a909a">v0.2.0</text>
+    <text class="mono" x="76" y="140" font-size="80" font-weight="700" fill="#e6e8eb">tokgo</text>
+    <text class="mono" x="340" y="140" font-size="19" fill="#8a909a">v0.2.0</text>
 
-    <text class="sans" x="56" y="244" font-size="27" fill="#e6e8eb">Waits for the stream,</text>
-    <text class="sans" x="56" y="282" font-size="27" fill="#e6e8eb">records it, remuxes to mp4.</text>
-
-    <text class="mono" x="56" y="340" font-size="17" fill="#8a909a">Go binary · ffmpeg copy · MIT</text>
+    <text class="sans" x="76" y="180" font-size="24" fill="#e6e8eb">One screen, three columns, every account at once.</text>
+    <text class="mono" x="76" y="208" font-size="15" fill="#8a909a">Go binary · ffmpeg copy · MIT</text>
   </g>
 
-  <!-- capture session -->
-  <g id="project-proof" transform="translate(520 42)">
-    <rect x="0" y="0" width="624" height="316" rx="16" fill="#0e1116" stroke="#242a33"/>
+  <!-- monitor session -->
+  <g id="project-proof">
+    <rect x="76" y="228" width="1048" height="376" rx="14" fill="#0e1116" stroke="#242a33"/>
 
-    <circle cx="24" cy="21" r="4" fill="#2a3038"/>
-    <circle cx="42" cy="21" r="4" fill="#2a3038"/>
-    <circle cx="60" cy="21" r="4" fill="#2a3038"/>
-    <text class="mono" x="84" y="27" font-size="16" fill="#8a909a">tokgo -u skynews -once -duration 1</text>
+    <circle cx="100" cy="247" r="4" fill="#2a3038"/>
+    <circle cx="118" cy="247" r="4" fill="#2a3038"/>
+    <circle cx="136" cy="247" r="4" fill="#2a3038"/>
+    <text class="mono" x="160" y="253" font-size="15" fill="#8a909a">tokgo tui</text>
 
-    <line x1="0" y1="42" x2="624" y2="42" stroke="#242a33"/>
+    <line x1="76" y1="266" x2="1124" y2="266" stroke="#242a33"/>
 
-    <g class="mono" font-size="19">
-      <text x="24" y="76" fill="#e6e8eb"><tspan fill="#25f4ee">[INFO]  </tspan>@skynews · LIVE · up 24:06</text>
-      <text x="24" y="108" fill="#e6e8eb"><tspan fill="#25f4ee">[INFO]  </tspan>title "Your budget questions answered"</text>
-      <text x="24" y="140" fill="#e6e8eb"><tspan fill="#25f4ee" font-weight="700">[START] </tspan>skynews=20261029_202458</text>
-      <text x="24" y="172" fill="#e6e8eb"><tspan fill="#25f4ee">⠧ </tspan>recording.. <tspan fill="#9aa0aa">(58s / cap 1min)</tspan></text>
-      <text x="24" y="204" fill="#e6e8eb"><tspan fill="#ffd166" font-weight="700">[STOP]  </tspan>duration cap reached · 1min</text>
-      <text x="24" y="236" fill="#e6e8eb"><tspan fill="#25f4ee">⠋ </tspan>remuxing..</text>
-      <text x="24" y="268" fill="#e6e8eb"><tspan fill="#3ddc84" font-weight="700">[DONE]  </tspan>skynews=20261029_202458.mp4</text>
-    </g>
+    <text class="mono" xml:space="preserve" x="100" y="286" font-size="14" fill="#e6e8eb"><tspan fill="#fe2c55" font-weight="700">tokgo</tspan><tspan fill="#8a909a"> 0.2.0 · monitor</tspan><tspan fill="#e6e8eb">                                                                 </tspan><tspan fill="#25f4ee">●</tspan><tspan fill="#8a909a"> 2 recording · 5 targets · 02:46</tspan></text>
+    <text class="mono" xml:space="preserve" x="100" y="307" font-size="14" fill="#e6e8eb"><tspan fill="#8a909a">───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</tspan></text>
+    <text class="mono" xml:space="preserve" x="100" y="328" font-size="14" fill="#e6e8eb"><tspan fill="#8a909a">idle 1                                </tspan><tspan fill="#e6e8eb">  </tspan><tspan fill="#8a909a">polling 2                             </tspan><tspan fill="#e6e8eb">  </tspan><tspan fill="#8a909a">live 2                                </tspan></text>
+    <text class="mono" xml:space="preserve" x="100" y="349" font-size="14" fill="#e6e8eb"><tspan fill="#8a909a">idle   @donut_ntp.42          </tspan><tspan fill="#e6e8eb">        </tspan><tspan fill="#e6e8eb">  </tspan><tspan fill="#8a909a">wait   @natgeo                </tspan><tspan fill="#e6e8eb">  -00:24</tspan><tspan fill="#e6e8eb">  </tspan><tspan fill="#fe2c55" font-weight="700">REC    @skynews               </tspan><tspan fill="#e6e8eb">   02:46</tspan></text>
+    <text class="mono" xml:space="preserve" x="100" y="370" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb">                                      </tspan><tspan fill="#e6e8eb">  </tspan><tspan fill="#25f4ee">lookup @bbcnews               </tspan><tspan fill="#e6e8eb">   00:00</tspan><tspan fill="#e6e8eb">  </tspan><tspan fill="#fe2c55" font-weight="700">REC    @aljazeeraenglish      </tspan><tspan fill="#e6e8eb">   01:24</tspan></text>
+    <text class="mono" xml:space="preserve" x="100" y="391" font-size="14" fill="#e6e8eb"><tspan fill="#8a909a">activity</tspan></text>
+    <text class="mono" xml:space="preserve" x="117" y="412" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb">  </tspan><tspan fill="#25f4ee">•</tspan></text>
+    <text class="mono" xml:space="preserve" x="134" y="412" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb"> @skynews · LIVE · up 24:06</tspan></text>
+    <text class="mono" xml:space="preserve" x="117" y="433" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb">  </tspan><tspan fill="#25f4ee" font-weight="700">▶</tspan></text>
+    <text class="mono" xml:space="preserve" x="134" y="433" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb"> skynews=20261030_220458</tspan></text>
+    <text class="mono" xml:space="preserve" x="117" y="454" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb">  </tspan><tspan fill="#25f4ee">•</tspan></text>
+    <text class="mono" xml:space="preserve" x="134" y="454" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb"> @aljazeeraenglish · LIVE · up 03:11</tspan></text>
+    <text class="mono" xml:space="preserve" x="117" y="475" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb">  </tspan><tspan fill="#25f4ee" font-weight="700">▶</tspan></text>
+    <text class="mono" xml:space="preserve" x="134" y="475" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb"> aljazeeraenglish=20261030_220501</tspan></text>
+    <text class="mono" xml:space="preserve" x="117" y="496" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb">  </tspan><tspan fill="#25f4ee">•</tspan></text>
+    <text class="mono" xml:space="preserve" x="134" y="496" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb"> @natgeo: the user is not hosting a live stream at the moment</tspan></text>
+    <text class="mono" xml:space="preserve" x="117" y="517" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb">  </tspan><tspan fill="#25f4ee">•</tspan></text>
+    <text class="mono" xml:space="preserve" x="134" y="517" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb"> starting @bbcnews · 0 queued</tspan></text>
+    <text class="mono" xml:space="preserve" x="100" y="538" font-size="14" fill="#e6e8eb"><tspan fill="#8a909a">───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</tspan></text>
+    <text class="mono" xml:space="preserve" x="100" y="559" font-size="14" fill="#e6e8eb"><tspan fill="#e6e8eb">› /stop</tspan></text>
+    <text class="mono" xml:space="preserve" x="100" y="580" font-size="14" fill="#e6e8eb"><tspan fill="#8a909a">tab  /stop all · /stop donut_ntp.42 · /stop natgeo · /stop bbcnews · /stop skynews · /stop aljazeeraenglish</tspan></text>
   </g>
 </svg>
