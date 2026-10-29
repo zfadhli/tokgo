@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"tokgo/internal/config"
 	"tokgo/internal/logx"
 	"tokgo/internal/record"
 )
@@ -183,11 +184,10 @@ func TestAddUserJoinsTheRun(t *testing.T) {
 		t.Fatalf("started %q, want the added target", got)
 	}
 	log.wait(t, "guest", PhaseQueued)
-
-	select {
-	case err := <-done:
-		t.Fatalf("Run returned %v while the added target was still running", err)
-	case <-time.After(100 * time.Millisecond):
+	// The run can only answer ErrUserRunning while it still holds the target,
+	// so this proves the run is in flight without waiting on the clock.
+	if err := r.AddUser("guest"); !errors.Is(err, ErrUserRunning) {
+		t.Fatalf("AddUser(guest) during the run = %v, want ErrUserRunning", err)
 	}
 
 	close(gate)
@@ -283,6 +283,68 @@ func TestAddUserRejectsADuplicate(t *testing.T) {
 	}
 	close(gate)
 	recv(t, done)
+}
+
+// A repeated target is one target. Counting it twice made the run take the
+// multi-target path, so its only failure was logged and reported as ErrReported
+// instead of coming back wrapped the way a single target's does.
+func TestRunDedupesRepeatedTargets(t *testing.T) {
+	logs := captureLog(t)
+	boom := errors.New("boom")
+	r := &Runner{}
+	ran := make(chan string, 2)
+
+	err := r.supervise(context.Background(), []string{"alice", "alice"}, func(_ context.Context, user string) (string, error) {
+		ran <- user
+		return "", boom
+	})
+
+	if got := len(ran); got != 1 {
+		t.Fatalf("%d target goroutines ran, want 1", got)
+	}
+	if err == nil || err.Error() != "@alice: boom" || !errors.Is(err, boom) {
+		t.Fatalf("Run = %v, want @alice: boom wrapping the cause", err)
+	}
+	if lines := logs(); len(lines) != 0 {
+		t.Fatalf("a single-target failure logged %q, want nothing", lines)
+	}
+}
+
+// A url run resolves every target through the same url, so a second target
+// would share the first one's user and room. It has exactly one target.
+func TestAddUserRefusesOnAURLRun(t *testing.T) {
+	r := &Runner{cfg: config.Config{URL: "https://www.tiktok.com/@host/live"}}
+	log := newStatusLog()
+	r.OnStatus(log.observe)
+
+	gate := make(chan struct{})
+	started := make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- r.supervise(context.Background(), []string{""}, func(context.Context, string) (string, error) {
+			started <- ""
+			<-gate
+			return "", nil
+		})
+	}()
+
+	recv(t, started)
+	if err := r.AddUser("someone"); !errors.Is(err, ErrURLRun) {
+		t.Fatalf("AddUser on a url run = %v, want ErrURLRun", err)
+	}
+	if r.DropUser("someone") {
+		t.Fatal("the refused target was registered anyway")
+	}
+
+	close(gate)
+	if err := recv(t, done); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, s := range log.snapshot() {
+		if s.User == "someone" {
+			t.Fatalf("a refused target emitted %+v", s)
+		}
+	}
 }
 
 func TestRunWrapsASingleTargetError(t *testing.T) {

@@ -128,6 +128,13 @@ func (p *progress) add(n int) {
 	p.send(StageCapturing)
 }
 
+// discard drops the bytes of a candidate that was thrown away, so the next
+// report matches the segments that survived on disk.
+func (p *progress) discard(n int64) {
+	p.total -= n
+	p.send(StageCapturing)
+}
+
 // flush sends the final count, which the throttle may have held back.
 func (p *progress) flush() {
 	if p.total == p.last {
@@ -164,6 +171,39 @@ func (s countingSink) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// claimBase returns the first capture base no other recording has taken, plus
+// the claim file that keeps it ours until Record returns. Existence alone is
+// not enough: two recordings of the same user can start in the same second, and
+// a second tokgo can share the output directory, so the claim is created with
+// O_EXCL. A claim left by a crash only shadows that one second's name.
+func claimBase(dir, stem string) (base, claim string, err error) {
+	for n := 1; ; n++ {
+		base = filepath.Join(dir, stem)
+		if n > 1 {
+			base = fmt.Sprintf("%s-%d", base, n)
+		}
+		if taken(base+".mp4") || taken(base+".000.ts") || taken(base+".000.flv") {
+			continue
+		}
+		claim = base + ".claim"
+		f, err := os.OpenFile(claim, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			f.Close()
+			return base, claim, nil
+		}
+		if !os.IsExist(err) {
+			return "", "", err
+		}
+	}
+}
+
+// taken reports whether path exists. A path we cannot stat counts as taken:
+// a new name is cheaper than overwriting a recording we could not inspect.
+func taken(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil || !os.IsNotExist(err)
+}
+
 // Record captures one live session and returns the final mp4 path.
 func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, error) {
 	start := time.Now()
@@ -175,9 +215,14 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 		return "", tiktok.ErrLiveURL
 	}
 
+	base, claim, err := claimBase(r.opts.OutputDir, user+"="+start.Format("20060102_150405"))
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(claim)
 	sess := &session{
 		ffmpegPath: r.opts.FFmpegPath,
-		base:       filepath.Join(r.opts.OutputDir, user+"="+start.Format("20060102_150405")),
+		base:       base,
 	}
 	prog := &progress{report: r.opts.Report, user: user}
 	var deadline time.Time
@@ -220,6 +265,7 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 				logx.Warnf("could not remove the discarded segment %s: %v", segment, err)
 			}
 		}
+		prog.discard(written)
 		logx.Warnf("live stream url %d/%d delivered %d bytes, discarded its %d segment(s), trying the next one", i+1, len(urls), written, len(discarded))
 	}
 	if len(sess.segments) == 0 {
