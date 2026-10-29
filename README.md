@@ -2,7 +2,8 @@
 
 Records TikTok live streams to mp4. A clean-room Go implementation of the CLI
 surface of an earlier Python implementation:
-same flags, same three modes, no Python runtime, no third-party dependencies.
+same flags, same three modes, no Python runtime, plus an interactive `tokgo tui`
+front end.
 
 ```
 tokgo -user somecreator -mode automatic -output ./captures
@@ -36,6 +37,24 @@ go build -o tokgo .
 
 Passing one of `-user`, `-room_id`, `-url` is required for `manual` and
 `automatic`; passing more than one is an error.
+
+## TUI
+
+```
+tokgo tui
+```
+
+An interactive form for the same run, built on Bubble Tea: mode chips, a single
+target field that accepts a username, a live URL or a numeric room id, plus
+duration, output directory, proxy and the Telegram toggle. The form is turned
+into argv and validated by the same `cli.Parse` the flags use, so it cannot
+accept a combination the CLI would reject or miss one it allows.
+
+Start swaps to a live view: target, mode, elapsed time against the `-duration`
+cap, and the tail of the runner's log. Ctrl-C stops the capture and lets the
+remux finish (a second press quits immediately), `r` starts a new run with the
+form still filled in. The UI owns stdout while it runs, so log lines are routed
+into the view; the debug log file is written as usual.
 
 ## Modes
 

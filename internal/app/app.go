@@ -185,6 +185,7 @@ func (r *Runner) capture(ctx context.Context, user, roomID string) error {
 	if err != nil {
 		return err
 	}
+	logx.Infof("saved %s", path)
 	if !r.cfg.UploadTelegram {
 		return nil
 	}

@@ -9,16 +9,16 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
 	"tokgo/internal/app"
+	"tokgo/internal/boot"
 	"tokgo/internal/cli"
 	"tokgo/internal/logx"
 	"tokgo/internal/telegram"
+	"tokgo/internal/tui"
 )
 
 const version = "0.1.0"
@@ -30,6 +30,16 @@ const updateRepo = ""
 func main() {
 	logx.Init(logx.DefaultPath)
 	defer logx.Close()
+
+	// `tokgo tui` is the only subcommand: everything else is flags, matching the
+	// reference CLI.
+	if len(os.Args) > 1 && os.Args[1] == "tui" {
+		if err := tui.Run(version); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	banner()
 
@@ -44,7 +54,7 @@ func main() {
 		os.Exit(2)
 	}
 	cfg := parsed.Config
-	cfg.Cookies = readCookies(cookieFile)
+	cfg.Cookies = boot.ReadCookies(boot.CookieFile)
 	if cfg.OutputDir != "" {
 		if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 			logx.Errorf("cannot create output directory %s: %v", cfg.OutputDir, err)
@@ -52,7 +62,7 @@ func main() {
 		}
 	}
 
-	if err := checkFFmpeg(cfg.FFmpegPath); err != nil {
+	if err := boot.CheckFFmpeg(cfg.FFmpegPath); err != nil {
 		logx.Errorf("%v", err)
 		os.Exit(1)
 	}
@@ -80,42 +90,6 @@ func main() {
 		logx.Errorf("%v", err)
 		os.Exit(1)
 	}
-}
-
-// cookieFile is where cookies live, matching the reference layout.
-const cookieFile = "cookies.json"
-
-// readCookies tolerates a missing or empty file: anonymous lookups still work
-// for public rooms, and every path that truly needs a login reports it itself.
-func readCookies(path string) map[string]string {
-	body, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		if !os.IsNotExist(err) {
-			logx.Warnf("cannot read %s: %v", path, err)
-		}
-		return nil
-	}
-	cookies := map[string]string{}
-	if err := json.Unmarshal(body, &cookies); err != nil {
-		logx.Warnf("%s is not a flat JSON object of cookies: %v", path, err)
-		return nil
-	}
-	for name, value := range cookies {
-		if value == "" {
-			delete(cookies, name)
-		}
-	}
-	return cookies
-}
-
-func checkFFmpeg(path string) error {
-	if path == "" {
-		path = "ffmpeg"
-	}
-	if _, err := exec.LookPath(path); err != nil {
-		return fmt.Errorf("ffmpeg not found (%s) - install it or pass -ffmpeg-path: %w", path, err)
-	}
-	return nil
 }
 
 // signalContext stops the recording on the first Ctrl-C so the capture is

@@ -24,6 +24,7 @@ var tikTokURL = regexp.MustCompile(`^.*www\.tiktok\.com.*$|^.*vm\.tiktok\.com.*$
 // Usage is the help text, printed with -h and on a parse error.
 func Usage() string {
 	return `Usage: tokgo [options]
+       tokgo tui
 
 Flags:
   -url string                TikTok live room url

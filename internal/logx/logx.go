@@ -17,11 +17,21 @@ const (
 )
 
 var (
-	mu   sync.Mutex
-	file *os.File
-	size int64
-	path = DefaultPath
+	mu     sync.Mutex
+	file   *os.File
+	size   int64
+	path   = DefaultPath
+	sinkFn func(level, text string)
 )
+
+// SetSink diverts the console copies of every log line to f, keeping the debug
+// file untouched. It exists so a full-screen UI can own stdout. A nil f
+// restores the normal console output.
+func SetSink(f func(level, text string)) {
+	mu.Lock()
+	sinkFn = f
+	mu.Unlock()
+}
 
 // Init opens the debug log, rotating it when it grows past 5 MiB and keeping
 // three generations. A failure to open the file is reported and ignored so a
@@ -75,33 +85,44 @@ func write(level, format string, args ...any) {
 	now := time.Now().Format("2006-01-02 15:04:05")
 
 	mu.Lock()
-	defer mu.Unlock()
+	sink := sinkFn
 
-	switch level {
-	case "INFO":
-		fmt.Fprintf(os.Stdout, "[*] %s - %s", now, msg)
-		if len(msg) == 0 || msg[len(msg)-1] != '\n' {
-			fmt.Fprintln(os.Stdout)
-		}
-	case "WARN", "ERROR":
-		fmt.Fprintf(os.Stderr, "[!] %s - %s", now, msg)
-		if len(msg) == 0 || msg[len(msg)-1] != '\n' {
-			fmt.Fprintln(os.Stderr)
+	if sink == nil {
+		switch level {
+		case "INFO":
+			fmt.Fprintf(os.Stdout, "[*] %s - %s", now, msg)
+			if len(msg) == 0 || msg[len(msg)-1] != '\n' {
+				fmt.Fprintln(os.Stdout)
+			}
+		case "WARN", "ERROR":
+			fmt.Fprintf(os.Stderr, "[!] %s - %s", now, msg)
+			if len(msg) == 0 || msg[len(msg)-1] != '\n' {
+				fmt.Fprintln(os.Stderr)
+			}
 		}
 	}
 
 	if file == nil {
+		mu.Unlock()
+		if sink != nil {
+			sink(level, trimNewline(msg))
+		}
 		return
 	}
 	line := fmt.Sprintf("%s [%s] %s\n", now, level, trimNewline(msg))
 	if size+int64(len(line)) >= maxBytes {
 		rotateLocked()
-		if file == nil {
-			return
-		}
 	}
-	n, _ := file.WriteString(line)
-	size += int64(n)
+	var n int
+	if file != nil {
+		n, _ = file.WriteString(line)
+		size += int64(n)
+	}
+	mu.Unlock()
+
+	if sink != nil {
+		sink(level, trimNewline(msg))
+	}
 }
 
 func trimNewline(s string) string {
