@@ -292,7 +292,29 @@ func (c *Client) OpenStream(ctx context.Context, streamURL string) (io.ReadClose
 	return resp.Body, nil
 }
 
+// roomInfo fetches the webcast room payload. A restricted answer triggers one
+// retry without the tt-target-idc cookie: that cookie is a routing hint, and a
+// value that does not match the session's region makes TikTok answer 4003110
+// for rooms it would otherwise serve. The reference tool ships a hardcoded
+// idc value in its default cookies.json, so this trap is common.
 func (c *Client) roomInfo(ctx context.Context, roomID string) (*RoomInfo, error) {
+	info, err := c.fetchRoomInfo(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	if info.restricted() && c.dropCookie(idcCookie) {
+		logx.Infof("room api answered 4003110 with the configured %s cookie present, retrying without it", idcCookie)
+		if retried, retryErr := c.fetchRoomInfo(ctx, roomID); retryErr == nil {
+			if retried.restricted() {
+				logx.Warnf("still restricted after dropping %s: the room itself needs a login", idcCookie)
+			}
+			return retried, nil
+		}
+	}
+	return info, nil
+}
+
+func (c *Client) fetchRoomInfo(ctx context.Context, roomID string) (*RoomInfo, error) {
 	resp, err := c.get(ctx, c.webcast+"/webcast/room/info/?aid=1988&room_id="+url.QueryEscape(roomID), false)
 	if err != nil {
 		return nil, err

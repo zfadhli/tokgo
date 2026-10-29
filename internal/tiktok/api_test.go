@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -664,4 +665,69 @@ func quoteJSON(t *testing.T, raw string) string {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 	return string(encoded)
+}
+
+// TestRoomInfoRetriesWithoutStaleIDC covers the trap that a configured
+// tt-target-idc cookie creates: TikTok answers 4003110 while that routing hint
+// disagrees with the session's datacentre, and serves the room once it is gone.
+func TestRoomInfoRetriesWithoutStaleIDC(t *testing.T) {
+	room := `{"status_code":0,"data":{"status":2,"stream_url":{"flv_pull_url":{"FULL_HD1":"https://cdn.example/full.flv"}}}}`
+	roomInfoHits := 0
+
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/webcast/room/info/" {
+			http.NotFound(w, r)
+			return
+		}
+		roomInfoHits++
+		if cookie, err := r.Cookie(idcCookie); err == nil && cookie.Value != "" {
+			writeBody(w, infoRestricted)
+			return
+		}
+		writeBody(w, room)
+	}))
+	c.hc.Jar.SetCookies(mustURL(t, c.webcast+"/"), []*http.Cookie{{Name: idcCookie, Value: "useast2a", Path: "/"}})
+
+	got, err := c.LiveURLs(t.Context(), "7123", "creator")
+	if err != nil {
+		t.Fatalf("LiveURLs: %v", err)
+	}
+	if len(got) != 1 || got[0] != "https://cdn.example/full.flv" {
+		t.Fatalf("urls = %v", got)
+	}
+	if roomInfoHits != 2 {
+		t.Fatalf("room info fetched %d times, want 2 (one refused, one retried)", roomInfoHits)
+	}
+}
+
+// TestRoomInfoDoesNotRetryWithoutIDC keeps the retry narrow: no stale cookie
+// means no second request.
+func TestRoomInfoDoesNotRetryWithoutIDC(t *testing.T) {
+	roomInfoHits := 0
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/webcast/room/info/":
+			roomInfoHits++
+			writeBody(w, infoRestricted)
+		case "/tiktok/room/api/sign":
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			writeBody(w, `<html>no stream here</html>`)
+		}
+	}))
+	if _, err := c.LiveURLs(t.Context(), "7123", "creator"); !errors.Is(err, ErrPrivateRoom) {
+		t.Fatalf("err = %v, want ErrPrivateRoom", err)
+	}
+	if roomInfoHits != 1 {
+		t.Fatalf("room info fetched %d times, want 1", roomInfoHits)
+	}
+}
+
+func mustURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse %s: %v", raw, err)
+	}
+	return parsed
 }

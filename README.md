@@ -69,15 +69,26 @@ behind and the run fails with `unable to retrieve the live stream url`.
 ## Cookies and Telegram
 
 `cookies.json` is a flat JSON object of cookie name to value, read from the
-working directory:
+working directory. `sessionid_ss` is the one that carries a login:
 
 ```json
-{ "sessionid_ss": "...", "tt-target-idc": "useast2a" }
+{ "sessionid_ss": "..." }
 ```
 
-A missing file is fine; TikTok's login walls are then reported per request. For
-private or login-restricted lives, supply the cookies. `cookies.example.json`
-shows the shape, and `sessionid_ss` is the cookie that carries the session.
+Cookies are sent to both `www.tiktok.com` and `webcast.tiktok.com`; the per-host
+cookie jar would otherwise leave the webcast API unauthenticated, which is
+exactly the endpoint a login-gated room needs. A missing file is fine; TikTok's
+login walls are then reported per request.
+
+Do not put `tt-target-idc` in there unless you know your session's datacentre
+matches it. It is a routing hint: a stale value makes TikTok answer `4003110`
+for rooms it would otherwise serve, which looks like a private room. The
+reference project ships `useast2a` in its default file and many users hit this.
+The recorder defends itself: on a `4003110` answer with that cookie present it
+retries once without it and says so in the log.
+
+```json
+```
 
 Login-gated rooms are fatal in every mode: the run stops with
 `live is private, login required` and exit status 1 instead of polling a room no
@@ -229,11 +240,13 @@ Verified two ways:
 - Against the real service, the signed fallback was checked directly:
   `TestSignedEndpointYieldsPlayableStream` resolved 3 candidate urls for a live
   user and the first one served an FLV container.
-- A real restricted live was found (`@donut_ntp.42`, room `7701946275792554760`):
+- A real restricted live was found and recorded (`@donut_ntp.42`, room
+  `7701946275792554760`):
   `check_alive` says `alive:true`, `room/info` answers `4003110` with an empty
   prompt, the signed endpoint returns the room with `status:2` but **no
   `streamData` key at all**, the live page is the SlardarWAF stub, and the
   Android webcast host answers `4003110` too. TikTok withholds that manifest from
   anonymous clients on every reachable endpoint, so the chain correctly ends in
-  `live is private, login required` rather than a wrong `not live`. Unlocking it
-  needs a logged-in `sessionid_ss`, which no amount of fallback code replaces.
+  `live is private, login required` rather than a wrong `not live`. With a valid
+  `sessionid_ss` the same room records (1.0 MB, 6 s, h264 + aac), and the run
+  logs the one-off retry that drops the stale `tt-target-idc` cookie.

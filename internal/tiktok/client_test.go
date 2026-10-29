@@ -73,12 +73,24 @@ func TestNewSeedsCookieJarAndHosts(t *testing.T) {
 	}
 }
 
+// baseTransport unwraps the cookie filter so the transport invariants stay
+// checkable, and asserts the filter is what sits in front of it.
+func baseTransport(t *testing.T, c *Client) *http.Transport {
+	t.Helper()
+	filter, ok := c.hc.Transport.(*cookieFilter)
+	if !ok {
+		t.Fatalf("transport is %T, want *cookieFilter", c.hc.Transport)
+	}
+	tr, ok := filter.next.(*http.Transport)
+	if !ok {
+		t.Fatalf("filtered transport is %T, want *http.Transport", filter.next)
+	}
+	return tr
+}
+
 func TestTransportWiring(t *testing.T) {
 	c := New("http://127.0.0.1:9", nil)
-	tr, ok := c.hc.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("transport is %T, want *http.Transport", c.hc.Transport)
-	}
+	tr := baseTransport(t, c)
 	// The proxy is tunnelled inside the dialer, so Transport.Proxy must stay nil
 	// or http.Transport would skip DialTLSContext and drop the Chrome hello.
 	if tr.Proxy != nil {
@@ -107,10 +119,7 @@ func TestBrowserDropsProxyAndSharesJar(t *testing.T) {
 	if b == c {
 		t.Fatal("Browser returned the same client")
 	}
-	tr, ok := b.hc.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("browser transport is %T, want *http.Transport", b.hc.Transport)
-	}
+	tr := baseTransport(t, b)
 	if tr.Proxy != nil {
 		t.Error("Browser client must not use the proxy")
 	}
@@ -220,5 +229,23 @@ func TestOpenStream(t *testing.T) {
 		t.Fatal("OpenStream on 503 returned no error")
 	} else if !strings.Contains(err.Error(), "503") {
 		t.Errorf("error %q does not mention the status", err)
+	}
+}
+
+// TestBrowserSharesDroppedCookies proves the two clients share one omit set: the
+// recorder's stream client must not re-learn that a cookie has to go, which
+// would cost one wasted request per recording.
+func TestBrowserSharesDroppedCookies(t *testing.T) {
+	c := New("", map[string]string{idcCookie: "useast2a"})
+	b := c.Browser()
+
+	if !c.dropCookie(idcCookie) {
+		t.Fatal("first drop should report the cookie as configured")
+	}
+	if c.dropCookie(idcCookie) {
+		t.Error("second drop should report nothing left to remove")
+	}
+	if !b.filter.omitted.has(idcCookie) {
+		t.Error("the browser client must share the omit set")
 	}
 }
