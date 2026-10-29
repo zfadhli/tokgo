@@ -27,6 +27,33 @@ func newModel() *Model {
 	return m
 }
 
+// savedList is a target list with every entry in the manual group.
+func savedList(users ...string) []saved {
+	out := make([]saved, 0, len(users))
+	for _, user := range users {
+		out = append(out, saved{user: user})
+	}
+	return out
+}
+
+// names is the usernames of a list, for a readable failure message.
+func names(list []saved) []string {
+	out := make([]string, 0, len(list))
+	for _, s := range list {
+		out = append(out, s.user)
+	}
+	return out
+}
+
+// autoList is a target list with every entry in the autostart group.
+func autoList(users ...string) []saved {
+	out := make([]saved, 0, len(users))
+	for _, user := range users {
+		out = append(out, saved{user: user, auto: true})
+	}
+	return out
+}
+
 func key(s string) tea.KeyMsg {
 	switch s {
 	case "enter":
@@ -649,7 +676,7 @@ func TestLayoutFitsTheTerminal(t *testing.T) {
 		}},
 		{"saved and idle", func() *Model {
 			m := newModel()
-			m.list = []string{"alpha", "beta", "gamma", "delta"}
+			m.list = savedList("alpha", "beta", "gamma", "delta")
 			m.syncRows()
 			return m
 		}},
@@ -675,19 +702,20 @@ func TestLayoutFitsTheTerminal(t *testing.T) {
 }
 
 // TestTargetsRoundTrip proves the saved list survives a restart: the same
-// names, the same order, in a directory saveTargets has to create.
+// names, the same groups, the same order, in a directory saveTargets has to
+// create.
 func TestTargetsRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokgo", "targets.txt")
 	if got := loadTargets(path); got != nil {
-		t.Fatalf("a missing file is an empty list, got %q", got)
+		t.Fatalf("a missing file is an empty list, got %q", names(got))
 	}
 
-	users := []string{"alpha", "beta"}
+	users := []saved{{user: "alpha"}, {user: "beta", auto: true}}
 	if err := saveTargets(path, users); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	if got := loadTargets(path); !slices.Equal(got, users) {
-		t.Fatalf("round trip = %q, want %q", got, users)
+		t.Fatalf("round trip = %q, want %q", names(got), names(users))
 	}
 
 	info, err := os.Stat(path)
@@ -710,22 +738,22 @@ func TestTargetsRoundTrip(t *testing.T) {
 // a leading @ and stray spaces. Names come back in file order.
 func TestLoadTargetsToleratesTheFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "targets.txt")
-	body := "alpha\n\n@beta\nalpha\n  gamma  \n@\n"
+	body := "alpha\n\n@beta\nalpha\n  *gamma  \n@\n*\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	want := []string{"alpha", "beta", "gamma"}
+	want := []saved{{user: "alpha"}, {user: "beta"}, {user: "gamma", auto: true}}
 	if got := loadTargets(path); !slices.Equal(got, want) {
-		t.Fatalf("loadTargets = %q, want %q", got, want)
+		t.Fatalf("loadTargets = %q, want %q", names(got), names(want))
 	}
 }
 
 // TestPersistenceOffWithoutAPath proves an unset HOME never writes anything.
 func TestPersistenceOffWithoutAPath(t *testing.T) {
 	if got := loadTargets(""); got != nil {
-		t.Fatalf("loadTargets(\"\") = %q, want nil", got)
+		t.Fatalf("loadTargets(\"\") = %q, want nil", names(got))
 	}
-	if err := saveTargets("", []string{"alpha"}); err != nil {
+	if err := saveTargets("", []saved{{user: "alpha"}}); err != nil {
 		t.Fatalf("saveTargets(\"\") = %v, want nil", err)
 	}
 }
@@ -756,8 +784,8 @@ func TestAddWritesTheListAndStartsNothing(t *testing.T) {
 	if m.ctrl != nil {
 		t.Fatal("/add must not install a runner while idle")
 	}
-	if got := loadTargets(m.userPath); !slices.Equal(got, []string{"alpha", "beta"}) {
-		t.Fatalf("saved = %q, want [alpha beta]", got)
+	if got := loadTargets(m.userPath); !slices.Equal(got, savedList("alpha", "beta")) {
+		t.Fatalf("saved = %q, want [alpha beta]", names(got))
 	}
 	for _, tgt := range m.targets {
 		if !tgt.idle {
@@ -776,14 +804,14 @@ func TestAddWritesTheListAndStartsNothing(t *testing.T) {
 func TestLoadSavedBuildsIdleRows(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	if err := saveTargets(filepath.Join(dir, "tokgo", "targets.txt"), []string{"alpha", "beta"}); err != nil {
+	if err := saveTargets(filepath.Join(dir, "tokgo", "targets.txt"), savedList("alpha", "beta")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	m := newModel()
 	m.loadSaved()
-	if !slices.Equal(m.list, []string{"alpha", "beta"}) {
-		t.Fatalf("list = %q, want [alpha beta]", m.list)
+	if !slices.Equal(m.list, savedList("alpha", "beta")) {
+		t.Fatalf("list = %q, want [alpha beta]", names(m.list))
 	}
 	if len(m.targets) != 2 {
 		t.Fatalf("want 2 rows, got %d", len(m.targets))
@@ -823,7 +851,7 @@ func TestStartCommand(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newModel()
 			m.userPath = filepath.Join(t.TempDir(), "targets.txt")
-			m.list = append([]string(nil), tc.saved...)
+			m.list = savedList(tc.saved...)
 			m.syncRows()
 			var ctrl *fakeCtrl
 			if tc.running {
@@ -869,7 +897,7 @@ func TestStartCommand(t *testing.T) {
 func TestStartAllUsesTheSavedOrder(t *testing.T) {
 	m := newModel()
 	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
-	m.list = []string{"beta", "alpha"}
+	m.list = savedList("beta", "alpha")
 	m.syncRows()
 	submit(m, "/start all")
 	if !slices.Equal(m.users, []string{"beta", "alpha"}) {
@@ -881,7 +909,7 @@ func TestStartAllUsesTheSavedOrder(t *testing.T) {
 // terminal phases without dropping a saved name.
 func TestSeedKeepsSavedRowsAndQueuesTheRun(t *testing.T) {
 	m := newModel()
-	m.list = []string{"alpha", "beta"}
+	m.list = savedList("alpha", "beta")
 	m.syncRows()
 	m.applyStatus(app.Status{User: "alpha", Phase: app.PhaseRecording, Bytes: 4096})
 	m.applyStatus(app.Status{User: "alpha", Phase: app.PhaseDone})
@@ -1013,7 +1041,7 @@ func TestRestartWhenIdleStartsTheRun(t *testing.T) {
 	if !slices.Equal(m.users, []string{"alpha"}) {
 		t.Fatalf("run users = %q, want [alpha]", m.users)
 	}
-	if !slices.Equal(loadTargets(m.userPath), []string{"alpha"}) {
+	if !slices.Equal(loadTargets(m.userPath), savedList("alpha")) {
 		t.Fatal("restart must remember the name")
 	}
 }
@@ -1221,7 +1249,7 @@ func TestCompletion(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newModel()
-			m.list = append([]string(nil), tc.saved...)
+			m.list = savedList(tc.saved...)
 			m.syncRows()
 			for _, user := range tc.live {
 				m.applyStatus(app.Status{User: user, Phase: app.PhaseRecording})
@@ -1263,7 +1291,7 @@ func TestCandidates(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newModel()
-			m.list = append([]string(nil), tc.saved...)
+			m.list = savedList(tc.saved...)
 			m.syncRows()
 			for _, user := range tc.live {
 				m.applyStatus(app.Status{User: user, Phase: app.PhaseRecording})
@@ -1279,7 +1307,7 @@ func TestCandidates(t *testing.T) {
 // instead of resuming mid list.
 func TestTypingResetsTheCycle(t *testing.T) {
 	m := newModel()
-	m.list = []string{"allan"}
+	m.list = savedList("allan")
 	m.syncRows()
 	m.input.SetValue("/start al")
 	m.Update(key("tab"))
@@ -1299,7 +1327,7 @@ func TestHintLine(t *testing.T) {
 		t.Fatalf("the empty input must show the key reminder, got %q", got)
 	}
 
-	m.list = []string{"alpha"}
+	m.list = savedList("alpha")
 	m.syncRows()
 	m.input.SetValue("/st")
 	got := m.hintLine()
@@ -1319,7 +1347,7 @@ func TestHintLine(t *testing.T) {
 // replaced with an unrelated name.
 func TestCompletionLeavesAnExactValueAlone(t *testing.T) {
 	m := newModel()
-	m.list = []string{"alpha"}
+	m.list = savedList("alpha")
 	m.syncRows()
 	m.input.SetValue("/restart alpha")
 	m.Update(key("tab"))
@@ -1338,11 +1366,11 @@ func TestRemoveTakesANameOffTheList(t *testing.T) {
 	submit(m, "/add alpha, beta")
 
 	submit(m, "/remove @alpha")
-	if !slices.Equal(m.list, []string{"beta"}) {
-		t.Fatalf("list = %q, want [beta]", m.list)
+	if !slices.Equal(m.list, savedList("beta")) {
+		t.Fatalf("list = %q, want [beta]", names(m.list))
 	}
-	if got := loadTargets(m.userPath); !slices.Equal(got, []string{"beta"}) {
-		t.Fatalf("saved = %q, want [beta]", got)
+	if got := loadTargets(m.userPath); !slices.Equal(got, savedList("beta")) {
+		t.Fatalf("saved = %q, want [beta]", names(got))
 	}
 	if _, ok := m.byName["alpha"]; ok {
 		t.Fatalf("the row must go with the name: %q", m.byName)
@@ -1362,15 +1390,15 @@ func TestRemoveStopsARunningTarget(t *testing.T) {
 	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
 	ctrl := &fakeCtrl{}
 	m.ctrl = ctrl
-	m.list = []string{"alpha", "beta"}
+	m.list = savedList("alpha", "beta")
 	m.syncRows()
 
 	submit(m, "/remove alpha")
 	if !slices.Equal(ctrl.dropped, []string{"alpha"}) {
 		t.Fatalf("dropped = %q, want [alpha]", ctrl.dropped)
 	}
-	if !slices.Equal(m.list, []string{"beta"}) {
-		t.Fatalf("list = %q, want [beta]", m.list)
+	if !slices.Equal(m.list, savedList("beta")) {
+		t.Fatalf("list = %q, want [beta]", names(m.list))
 	}
 	if _, ok := m.byName["alpha"]; !ok {
 		t.Fatal("a running target keeps its row until it stops")
@@ -1405,7 +1433,7 @@ func TestRemoveCancelsAQueuedRestart(t *testing.T) {
 func TestConfigShowsTheNextRun(t *testing.T) {
 	m := newModel()
 	m.userPath = "/tmp/targets.txt"
-	m.list = []string{"alpha"}
+	m.list = savedList("alpha")
 	m.cookies = map[string]string{"sessionid_ss": "abcdef1234"}
 	m.settings.duration = 12
 	m.settings.proxy = "socks5://127.0.0.1:1080"
@@ -1419,7 +1447,7 @@ func TestConfigShowsTheNextRun(t *testing.T) {
 		"socks5://127.0.0.1:1080",
 		"telegram   off",
 		"sessionid_ss ••••1234",
-		"1 saved · /tmp/targets.txt",
+		"1 saved · 0 autostart · /tmp/targets.txt",
 	} {
 		if !strings.Contains(logs, want) {
 			t.Fatalf("config missing %q:\n%s", want, logs)
@@ -1443,11 +1471,11 @@ func TestRememberRefusesWhatCannotBeSaved(t *testing.T) {
 	m := newModel()
 	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
 	m.remember([]string{"7123456789012345678", "https://www.tiktok.com/@a/live", "bad/name", "x", "alpha"})
-	if !slices.Equal(m.list, []string{"alpha"}) {
-		t.Fatalf("list = %q, want [alpha]", m.list)
+	if !slices.Equal(m.list, savedList("alpha")) {
+		t.Fatalf("list = %q, want [alpha]", names(m.list))
 	}
-	if got := loadTargets(m.userPath); !slices.Equal(got, []string{"alpha"}) {
-		t.Fatalf("saved = %q, want [alpha]", got)
+	if got := loadTargets(m.userPath); !slices.Equal(got, savedList("alpha")) {
+		t.Fatalf("saved = %q, want [alpha]", names(got))
 	}
 	if got := logText(m); strings.Count(got, "only usernames are saved") != 2 {
 		t.Fatalf("each rejected target needs its own warning:\n%s", got)
@@ -1576,5 +1604,156 @@ func TestBrokenSettingsFileFallsBackToTheDefaults(t *testing.T) {
 	}
 	if got := logText(m); !strings.Contains(got, "settings.json") {
 		t.Fatalf("the broken file needs a warning:\n%s", got)
+	}
+}
+
+// TestAutostartCommandMarksTheGroup proves /autostart moves one target into the
+// boot group and off moves it back, while /add always lands in the manual one.
+func TestAutostartCommandMarksTheGroup(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	submit(m, "/add alpha, beta")
+	if got := loadTargets(m.userPath); !slices.Equal(got, savedList("alpha", "beta")) {
+		t.Fatalf("a new target must not autostart: %s", names(got))
+	}
+
+	submit(m, "/autostart @alpha")
+	want := []saved{{user: "alpha", auto: true}, {user: "beta"}}
+	if got := loadTargets(m.userPath); !slices.Equal(got, want) {
+		t.Fatalf("saved = %+v, want %+v", got, want)
+	}
+	if !m.targets[m.byName["alpha"]].auto {
+		t.Fatal("the idle row must show the group")
+	}
+	if len(m.pendingAuto) != 0 {
+		t.Fatalf("a mark is for the next launch, not this one: %q", m.pendingAuto)
+	}
+	if got := logText(m); !strings.Contains(got, "starts with the next tokgo tui") {
+		t.Fatalf("activity missing the confirmation:\n%s", got)
+	}
+	if v := m.View(); !strings.Contains(v, "auto") {
+		t.Fatalf("the table must name the group:\n%s", v)
+	}
+
+	submit(m, "/autostart alpha off")
+	if got := loadTargets(m.userPath); !slices.Equal(got, savedList("alpha", "beta")) {
+		t.Fatalf("off must clear the flag: %+v", got)
+	}
+	if m.targets[m.byName["alpha"]].auto {
+		t.Fatal("the idle row must go back to idle")
+	}
+
+	submit(m, "/autostart gamma")
+	if got := loadTargets(m.userPath); !slices.Equal(got, []saved{{user: "alpha"}, {user: "beta"}, {user: "gamma", auto: true}}) {
+		t.Fatalf("an unknown name is saved in the autostart group: %+v", got)
+	}
+}
+
+// TestAutostartListingNamesTheGroups proves the bare command answers which
+// group every saved target is in.
+func TestAutostartListingNamesTheGroups(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	m.list = []saved{{user: "alpha"}, {user: "beta", auto: true}}
+	submit(m, "/autostart")
+	logs := logText(m)
+	for _, want := range []string{"autostart 1 · @beta", "manual    1 · @alpha"} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("listing missing %q:\n%s", want, logs)
+		}
+	}
+
+	m.list = nil
+	submit(m, "/autostart")
+	if got := logText(m); !strings.Contains(got, "no saved targets") {
+		t.Fatalf("an empty list needs a warning:\n%s", got)
+	}
+}
+
+// TestBootStaggersTheAutostartGroup proves opening the screen starts the group
+// one name per stagger window instead of all at once.
+func TestBootStaggersTheAutostartGroup(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "tokgo", "targets.txt")
+	if err := saveTargets(path, []saved{
+		{user: "alpha", auto: true},
+		{user: "beta", auto: true},
+		{user: "gamma"},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	m := newModel()
+	ctrl := &fakeCtrl{}
+	m.makeRunner = func(config.Config, telegram.Config) controller { return ctrl }
+	m.loadSaved()
+	if !slices.Equal(m.pendingAuto, []string{"alpha", "beta"}) {
+		t.Fatalf("queue = %q, want the autostart group only", m.pendingAuto)
+	}
+
+	start := m.now
+	_, cmd := m.Update(tickMsg(start.Add(time.Second)))
+	if cmd == nil {
+		t.Fatal("the first name must start the run")
+	}
+	if m.ctrl != ctrl {
+		t.Fatal("the first name must install the runner")
+	}
+	if !slices.Equal(m.users, []string{"alpha"}) {
+		t.Fatalf("first run = %q, want [alpha]", m.users)
+	}
+
+	for elapsed := 2; elapsed < 11; elapsed++ {
+		m.Update(tickMsg(start.Add(time.Duration(elapsed) * time.Second)))
+		if len(ctrl.added) != 0 {
+			t.Fatalf("nothing may start before 10s, got %q at %ds", ctrl.added, elapsed)
+		}
+	}
+	m.Update(tickMsg(start.Add(11 * time.Second)))
+	if !slices.Equal(ctrl.added, []string{"beta"}) {
+		t.Fatalf("added = %q, want [beta] after the stagger", ctrl.added)
+	}
+	if len(m.pendingAuto) != 0 {
+		t.Fatalf("the queue must drain, got %q", m.pendingAuto)
+	}
+	if slices.Contains(ctrl.added, "gamma") {
+		t.Fatalf("the manual group must not autostart: %q", ctrl.added)
+	}
+}
+
+// TestRemoveAndDropCancelTheAutostartQueue proves a queued name never starts
+// after it was removed or dropped.
+func TestRemoveAndDropCancelTheAutostartQueue(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	m.list = autoList("alpha", "beta")
+	m.pendingAuto = m.autoNames()
+
+	submit(m, "/remove beta")
+	if slices.Contains(m.pendingAuto, "beta") {
+		t.Fatalf("a removed name must leave the queue: %q", m.pendingAuto)
+	}
+
+	m.ctrl = &fakeCtrl{}
+	submit(m, "/drop alpha")
+	if slices.Contains(m.pendingAuto, "alpha") {
+		t.Fatalf("a dropped name must leave the queue: %q", m.pendingAuto)
+	}
+}
+
+// TestStartAllCoversBothGroups proves a manual start all still starts the whole
+// list, autostart group included.
+func TestStartAllCoversBothGroups(t *testing.T) {
+	m := newModel()
+	m.list = []saved{{user: "alpha"}, {user: "beta", auto: true}}
+	m.pendingAuto = m.autoNames()
+	m.syncRows()
+	submit(m, "/start all")
+	if !slices.Equal(m.users, []string{"alpha", "beta"}) {
+		t.Fatalf("users = %q, want both groups", m.users)
+	}
+	if len(m.pendingAuto) != 0 {
+		t.Fatalf("a manual start must not leave a queued double start: %q", m.pendingAuto)
 	}
 }

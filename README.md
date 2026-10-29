@@ -127,12 +127,21 @@ screen opens with one idle row per saved name, and
 edited by hand. Typing usernames without a slash also starts them and saves
 them. Live URLs and room ids run once and are not saved.
 
+The list has two groups. A new name lands in the manual one: the table shows it
+as `idle`, and nothing runs until `/start`. `/autostart <name>` moves it to the
+autostart group, `auto` in the table and `*name` in the file, and `tokgo tui`
+records it on open. The group starts one target every 10 seconds, so a dozen
+names do not all ask TikTok for a room id from one address at once. Bare
+`/autostart` prints both groups, so membership is visible without opening the
+file.
+
 Tab completes a command name or a saved username, and the hint line under the
 input shows what tab would fill.
 
 | Command | Meaning |
 |---|---|
 | `/add <name,...>` | save targets, and add them to a live run |
+| `/autostart <name> [off]` | start this target on the next `tokgo tui`; `off` returns it to manual |
 | `/start <name\|all>` | start one saved target, or every saved target |
 | `/restart <name>` | stop one target, remux it, then start it again |
 | `/remove <name>` | take one target off the saved list, stopping it if it runs |

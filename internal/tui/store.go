@@ -69,9 +69,17 @@ func writeSettings(path string, s storedSettings) error {
 	return os.WriteFile(path, append(body, '\n'), 0o644)
 }
 
-// loadTargets reads one username per line. Blank lines, duplicates and a
-// leading @ are tolerated; a missing file is an empty list, not an error.
-func loadTargets(path string) []string {
+// saved is one entry of the target list: a username, and whether opening the
+// screen should start it on its own. New names are manual until /autostart.
+type saved struct {
+	user string
+	auto bool
+}
+
+// loadTargets reads one username per line, with a leading * marking the entry
+// as part of the autostart group. Blank lines, duplicates and a leading @ are
+// tolerated; a missing file is an empty list, not an error.
+func loadTargets(path string) []saved {
 	if path == "" {
 		return nil
 	}
@@ -82,28 +90,39 @@ func loadTargets(path string) []string {
 		}
 		return nil
 	}
-	var users []string
+	var out []saved
 	seen := make(map[string]bool)
 	for _, line := range strings.Split(string(body), "\n") {
-		name := strings.TrimPrefix(strings.TrimSpace(line), "@")
+		line = strings.TrimSpace(line)
+		auto := strings.HasPrefix(line, "*")
+		name := strings.TrimPrefix(strings.TrimPrefix(line, "*"), "@")
 		if name == "" || seen[name] {
 			continue
 		}
 		seen[name] = true
-		users = append(users, name)
+		out = append(out, saved{user: name, auto: auto})
 	}
-	return users
+	return out
 }
 
-// saveTargets writes the list back, creating the directory it lives in.
-func saveTargets(path string, users []string) error {
+// saveTargets writes the list back, creating the directory it lives in. The
+// autostart group keeps its * so the file still reads as a plain list.
+func saveTargets(path string, list []saved) error {
 	if path == "" {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	body := strings.Join(users, "\n")
+	lines := make([]string, 0, len(list))
+	for _, s := range list {
+		prefix := ""
+		if s.auto {
+			prefix = "*"
+		}
+		lines = append(lines, prefix+s.user)
+	}
+	body := strings.Join(lines, "\n")
 	if body != "" {
 		body += "\n"
 	}

@@ -27,6 +27,10 @@ import (
 // maxLogLines bounds the retained scrollback; the view only ever shows the tail.
 const maxLogLines = 2000
 
+// autoStagger is the gap between two autostart targets, so opening the screen
+// does not fire every liveness lookup from one address at once.
+const autoStagger = 10 * time.Second
+
 type logLine struct {
 	level string
 	text  string
@@ -54,6 +58,7 @@ type target struct {
 	since  time.Time     // when the current phase started
 	active time.Duration // time spent in active phases, kept for the terminal row
 	idle   bool          // saved, not part of any run
+	auto   bool          // saved to start on its own when the screen opens
 }
 
 // settings is what the input commands change between runs.
@@ -94,11 +99,13 @@ type Model struct {
 
 	targets      []target
 	byName       map[string]int
-	list         []string // saved targets, in the order they were added
-	userPath     string   // where list persists; "" disables saving
-	settingsPath string   // where the input-line knobs persist; "" disables saving
-	restarting   []string // targets to start again once their run is gone
-	compIdx      int      // cycling index into the live completion set
+	list         []saved   // saved targets, in the order they were added
+	pendingAuto  []string  // autostart names waiting for their stagger window
+	autoNext     time.Time // when the next autostart is due
+	userPath     string    // where list persists; "" disables saving
+	settingsPath string    // where the input-line knobs persist; "" disables saving
+	restarting   []string  // targets to start again once their run is gone
+	compIdx      int       // cycling index into the live completion set
 	logs         []logLine
 	started      time.Time
 	ended        time.Time
@@ -219,7 +226,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.now = time.Time(msg)
-		return m, tickCmd()
+		return m, tea.Batch(tickCmd(), m.pumpAuto())
 
 	case runDoneMsg:
 		m.result = msg.err
@@ -321,6 +328,7 @@ func (m *Model) stopRun() {
 	}
 	m.finishing = true
 	m.restarting = nil
+	m.pendingAuto = nil
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
@@ -377,10 +385,12 @@ func (m *Model) runCmd() tea.Cmd {
 
 // startUsers starts a run when idle and adds to the live one otherwise. Both
 // paths remember the names first, so what the screen shows is what it saves.
+// A manual start also takes the name out of the boot queue.
 func (m *Model) startUsers(names []string) tea.Cmd {
 	if len(names) == 0 {
 		return nil
 	}
+	m.forgetAuto(names...)
 	m.remember(names)
 	if m.ctrl != nil {
 		m.addToRun(names)
@@ -402,13 +412,48 @@ func (m *Model) addToRun(names []string) {
 }
 
 // loadSaved reads the target list and the input-line settings, so the screen
-// opens on what the last session saved.
+// opens on what the last session saved. The autostart group joins the queue
+// here, with the first one already due.
 func (m *Model) loadSaved() {
 	m.userPath = targetFile()
 	m.settingsPath = settingsFile()
 	m.list = loadTargets(m.userPath)
 	m.settings = m.savedSettings()
+	m.pendingAuto = m.autoNames()
+	m.autoNext = m.now
 	m.syncRows()
+}
+
+// savedNames is the whole list, in the order the file holds it.
+func (m *Model) savedNames() []string {
+	out := make([]string, 0, len(m.list))
+	for _, s := range m.list {
+		out = append(out, s.user)
+	}
+	return out
+}
+
+// autoNames is the autostart group: the names that start when the screen opens.
+func (m *Model) autoNames() []string {
+	var out []string
+	for _, s := range m.list {
+		if s.auto {
+			out = append(out, s.user)
+		}
+	}
+	return out
+}
+
+// findSaved is the index of a name in the list, or -1.
+func (m *Model) findSaved(user string) int {
+	return slices.IndexFunc(m.list, func(s saved) bool { return s.user == user })
+}
+
+// writeList saves the list, warning instead of failing when the disk says no.
+func (m *Model) writeList() {
+	if err := saveTargets(m.userPath, m.list); err != nil {
+		m.warn("cannot save the target list: " + err.Error())
+	}
 }
 
 // savedSettings is the stored knobs with the limits the flags enforce applied,
@@ -457,12 +502,12 @@ func (m *Model) syncRows() {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	for _, name := range m.list {
-		if _, ok := m.byName[name]; ok {
+	for _, s := range m.list {
+		if _, ok := m.byName[s.user]; ok {
 			continue
 		}
-		m.targets = append(m.targets, target{user: name, label: statusLabel(name), idle: true, since: now})
-		m.byName[name] = len(m.targets) - 1
+		m.targets = append(m.targets, target{user: s.user, label: statusLabel(s.user), idle: true, auto: s.auto, since: now})
+		m.byName[s.user] = len(m.targets) - 1
 	}
 }
 
@@ -479,20 +524,16 @@ func (m *Model) remember(names []string) {
 			m.warn("not a username · " + name)
 			continue
 		}
-		if slices.Contains(m.list, name) {
+		if m.findSaved(name) >= 0 {
 			continue
 		}
-		m.list = append(m.list, name)
+		m.list = append(m.list, saved{user: name})
 		added = true
 	}
 	if !added {
 		return
 	}
-	if m.userPath != "" {
-		if err := saveTargets(m.userPath, m.list); err != nil {
-			m.warn("cannot save the target list: " + err.Error())
-		}
-	}
+	m.writeList()
 	m.syncRows()
 }
 
@@ -525,16 +566,15 @@ func (m *Model) remove(raw string) {
 		m.warn("remove needs a username")
 		return
 	}
-	i := slices.Index(m.list, user)
+	i := m.findSaved(user)
 	if i < 0 {
 		m.warn("@" + user + " is not saved")
 		return
 	}
 	m.list = slices.Delete(m.list, i, i+1)
-	if err := saveTargets(m.userPath, m.list); err != nil {
-		m.warn("cannot save the target list: " + err.Error())
-	}
+	m.writeList()
 	m.forgetRestart(user)
+	m.forgetAuto(user)
 	// A target the run still holds keeps its row until the terminal status, so
 	// the stopped capture stays visible with its size.
 	if !(m.ctrl != nil && m.ctrl.DropUser(user)) {
@@ -582,7 +622,7 @@ func (m *Model) showConfig() {
 		{"proxy", proxy},
 		{"telegram", telegram},
 		{"cookies", cli.CookieLine(m.cookies)},
-		{"targets", fmt.Sprintf("%d saved · %s", len(m.list), m.userPath)},
+		{"targets", fmt.Sprintf("%d saved · %d autostart · %s", len(m.list), len(m.autoNames()), m.userPath)},
 	}
 	for _, row := range rows {
 		value := row[1]
@@ -594,6 +634,91 @@ func (m *Model) showConfig() {
 	if m.ctrl != nil {
 		m.appendLog(logLine{level: "INFO", text: "a run is in flight · changes apply to the next run"})
 	}
+}
+
+// pumpAuto starts one queued autostart target per stagger window. The queue is
+// independent of a run's lifetime, so a /once run that ends hands the next name
+// its turn instead of dropping it.
+func (m *Model) pumpAuto() tea.Cmd {
+	if len(m.pendingAuto) == 0 || m.now.Before(m.autoNext) {
+		return nil
+	}
+	user := m.pendingAuto[0]
+	m.pendingAuto = m.pendingAuto[1:]
+	m.autoNext = m.now.Add(autoStagger)
+	m.appendLog(logLine{level: "INFO", text: "autostart @" + user})
+	return m.startUsers([]string{user})
+}
+
+// setAutostart puts one target in the autostart group, or takes it out with
+// off. It starts nothing now: the group is what the next launch opens on.
+func (m *Model) setAutostart(raw string) {
+	fields := strings.Fields(strings.TrimPrefix(strings.TrimSpace(raw), "@"))
+	if len(fields) == 0 {
+		m.showGroups()
+		return
+	}
+	user := fields[0]
+	on := true
+	switch strings.ToLower(strings.Join(fields[1:], " ")) {
+	case "", "on":
+	case "off":
+		on = false
+	default:
+		m.warn("autostart takes a username, then on or off")
+		return
+	}
+	if !isUsername(user) {
+		m.warn("not a username · " + user)
+		return
+	}
+	i := m.findSaved(user)
+	if i < 0 {
+		m.list = append(m.list, saved{user: user})
+		i = len(m.list) - 1
+		m.syncRows()
+	}
+	m.list[i].auto = on
+	if r, ok := m.byName[user]; ok {
+		m.targets[r].auto = on
+	}
+	m.writeList()
+	if !on {
+		m.forgetAuto(user)
+		m.appendLog(logLine{level: "INFO", text: "autostart @" + user + " off"})
+		return
+	}
+	m.appendLog(logLine{level: "INFO", text: "autostart @" + user + " · starts with the next tokgo tui"})
+}
+
+// showGroups prints the two halves of the saved list, so membership is visible
+// without opening the file.
+func (m *Model) showGroups() {
+	if len(m.list) == 0 {
+		m.warn("no saved targets · /add <name>")
+		return
+	}
+	auto := m.autoNames()
+	var manual []string
+	for _, s := range m.list {
+		if !s.auto {
+			manual = append(manual, s.user)
+		}
+	}
+	m.appendLog(logLine{level: "INFO", text: fmt.Sprintf("autostart %d · %s", len(auto), nameList(auto))})
+	m.appendLog(logLine{level: "INFO", text: fmt.Sprintf("manual    %d · %s", len(manual), nameList(manual))})
+}
+
+// nameList renders names for one log line, or none.
+func nameList(users []string) string {
+	if len(users) == 0 {
+		return "none"
+	}
+	out := make([]string, 0, len(users))
+	for _, user := range users {
+		out = append(out, "@"+user)
+	}
+	return strings.Join(out, " ")
 }
 
 // outputDir is the directory recordings land in, defaulting to the working
@@ -655,6 +780,7 @@ type command struct {
 
 var commands = []command{
 	{"add", "<name,...>", "save names to the list, and add them to a live run"},
+	{"autostart", "<name> [off]", "start this target when tokgo tui opens, off to stop that"},
 	{"start", "<name|all>", "start one saved target, or every saved target"},
 	{"restart", "<name>", "stop one target, let it remux, then start it again"},
 	{"remove", "<name>", "take one target off the saved list"},
@@ -707,7 +833,7 @@ func (m *Model) candidates(value string) []string {
 			out = append(out, "/start all")
 		}
 		names()
-	case "/restart", "/remove", "/drop", "/add":
+	case "/restart", "/remove", "/drop", "/add", "/autostart":
 		names()
 	case "/telegram":
 		for _, mode := range []string{"on", "off"} {
@@ -722,7 +848,7 @@ func (m *Model) candidates(value string) []string {
 // usernames is the completion pool: the saved list in order, then whatever the
 // run holds that the list does not.
 func (m *Model) usernames() []string {
-	out := append([]string(nil), m.list...)
+	out := m.savedNames()
 	for _, t := range m.targets {
 		if t.user == "" || slices.Contains(out, t.user) {
 			continue
@@ -778,6 +904,8 @@ func (m *Model) command(line string) tea.Cmd {
 		if m.ctrl != nil {
 			m.addToRun(names)
 		}
+	case "autostart":
+		m.setAutostart(rest)
 	case "start":
 		if rest == "" {
 			m.warn("start needs a username or all")
@@ -786,7 +914,7 @@ func (m *Model) command(line string) tea.Cmd {
 		if rest != "all" {
 			return m.startUsers(splitTargets(rest))
 		}
-		names := append([]string(nil), m.list...)
+		names := m.savedNames()
 		if len(names) == 0 {
 			m.warn("no saved targets · /add <name>")
 			break
@@ -887,6 +1015,7 @@ func (m *Model) drop(raw string) {
 		return
 	}
 	m.forgetRestart(user)
+	m.forgetAuto(user)
 	m.ctrl.DropUser(user)
 }
 
@@ -934,11 +1063,11 @@ func (m *Model) seed(cfg config.Config, users []string, now time.Time) {
 	case cfg.RoomID != "":
 		add(target{label: "room " + cfg.RoomID, since: now})
 	}
-	for _, name := range m.list {
-		if _, ok := m.byName[name]; ok {
+	for _, s := range m.list {
+		if _, ok := m.byName[s.user]; ok {
 			continue
 		}
-		add(target{user: name, label: statusLabel(name), idle: true, since: now})
+		add(target{user: s.user, label: statusLabel(s.user), idle: true, auto: s.auto, since: now})
 	}
 	for _, user := range users {
 		i, ok := m.byName[user]
@@ -993,6 +1122,16 @@ func (m *Model) applyStatus(s app.Status) tea.Cmd {
 func (m *Model) forgetRestart(user string) {
 	if i := slices.Index(m.restarting, user); i >= 0 {
 		m.restarting = slices.Delete(m.restarting, i, i+1)
+	}
+}
+
+// forgetAuto drops names from the boot queue, so a manual start or a drop is
+// the last word on whether they run.
+func (m *Model) forgetAuto(users ...string) {
+	for _, user := range users {
+		if i := slices.Index(m.pendingAuto, user); i >= 0 {
+			m.pendingAuto = slices.Delete(m.pendingAuto, i, i+1)
+		}
 	}
 }
 
