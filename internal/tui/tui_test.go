@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"tokgo/internal/app"
+	"tokgo/internal/boot"
 	"tokgo/internal/cli"
 	"tokgo/internal/config"
 	"tokgo/internal/telegram"
@@ -34,6 +37,8 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyUp}
 	case "down":
 		return tea.KeyMsg{Type: tea.KeyDown}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
 	default:
@@ -58,13 +63,14 @@ func logText(m *Model) string {
 
 // fakeCtrl records what the screen asks the runner to do.
 type fakeCtrl struct {
-	users   []string
-	added   []string
-	dropped []string
-	status  func(app.Status)
-	addErr  error
-	runErr  error
-	calls   int
+	users    []string
+	added    []string
+	dropped  []string
+	status   func(app.Status)
+	addErr   error
+	runErr   error
+	dropMiss bool
+	calls    int
 }
 
 func (f *fakeCtrl) Run(_ context.Context, users []string) error {
@@ -85,7 +91,7 @@ func (f *fakeCtrl) AddUser(user string) error {
 
 func (f *fakeCtrl) DropUser(user string) bool {
 	f.dropped = append(f.dropped, user)
-	return true
+	return !f.dropMiss
 }
 
 // TestArgv checks the settings render the exact flags the CLI takes.
@@ -647,6 +653,12 @@ func TestLayoutFitsTheTerminal(t *testing.T) {
 			m.applyStatus(app.Status{User: "a", Phase: app.PhaseDone, Bytes: 4096, File: "/out/a.mp4"})
 			return m
 		}},
+		{"saved and idle", func() *Model {
+			m := newModel()
+			m.list = []string{"alpha", "beta", "gamma", "delta"}
+			m.syncRows()
+			return m
+		}},
 	}
 	for _, w := range []int{40, 80, 120} {
 		for _, h := range []int{7, 8, 9, 10, 24, 40} {
@@ -664,6 +676,693 @@ func TestLayoutFitsTheTerminal(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// TestTargetsRoundTrip proves the saved list survives a restart: the same
+// names, the same order, in a directory saveTargets has to create.
+func TestTargetsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokgo", "targets.txt")
+	if got := loadTargets(path); got != nil {
+		t.Fatalf("a missing file is an empty list, got %q", got)
+	}
+
+	users := []string{"alpha", "beta"}
+	if err := saveTargets(path, users); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if got := loadTargets(path); !slices.Equal(got, users) {
+		t.Fatalf("round trip = %q, want %q", got, users)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("file mode = %o, want 644", got)
+	}
+	dir, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("stat dir: %v", err)
+	}
+	if got := dir.Mode().Perm(); got != 0o755 {
+		t.Fatalf("dir mode = %o, want 755", got)
+	}
+}
+
+// TestLoadTargetsToleratesTheFile covers a hand edited list: blanks, duplicates,
+// a leading @ and stray spaces. Names come back in file order.
+func TestLoadTargetsToleratesTheFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "targets.txt")
+	body := "alpha\n\n@beta\nalpha\n  gamma  \n@\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	want := []string{"alpha", "beta", "gamma"}
+	if got := loadTargets(path); !slices.Equal(got, want) {
+		t.Fatalf("loadTargets = %q, want %q", got, want)
+	}
+}
+
+// TestPersistenceOffWithoutAPath proves an unset HOME never writes anything.
+func TestPersistenceOffWithoutAPath(t *testing.T) {
+	if got := loadTargets(""); got != nil {
+		t.Fatalf("loadTargets(\"\") = %q, want nil", got)
+	}
+	if err := saveTargets("", []string{"alpha"}); err != nil {
+		t.Fatalf("saveTargets(\"\") = %v, want nil", err)
+	}
+}
+
+func TestTargetFileFollowsTheConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if got, want := targetFile(), filepath.Join(dir, "tokgo", "targets.txt"); got != want {
+		t.Fatalf("targetFile = %q, want %q", got, want)
+	}
+
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	if got := targetFile(); got != "" {
+		t.Fatalf("targetFile without a config dir = %q, want empty", got)
+	}
+}
+
+// TestAddWritesTheListAndStartsNothing proves /add only remembers: no runner
+// while idle, and the names reach the file.
+func TestAddWritesTheListAndStartsNothing(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	cmd := submit(m, "/add @alpha, beta")
+	if cmd != nil {
+		t.Fatal("/add must not start a run")
+	}
+	if m.ctrl != nil {
+		t.Fatal("/add must not install a runner while idle")
+	}
+	if got := loadTargets(m.userPath); !slices.Equal(got, []string{"alpha", "beta"}) {
+		t.Fatalf("saved = %q, want [alpha beta]", got)
+	}
+	for _, tgt := range m.targets {
+		if !tgt.idle {
+			t.Fatalf("a saved target must sit idle: %+v", tgt)
+		}
+	}
+	if got := logText(m); !strings.Contains(got, "no run in progress") {
+		if strings.Contains(got, "WARN") {
+			t.Fatalf("unexpected warning:\n%s", got)
+		}
+	}
+}
+
+// TestLoadSavedBuildsIdleRows proves startup shows one idle row per name on
+// disk, and the header counts them.
+func TestLoadSavedBuildsIdleRows(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := saveTargets(filepath.Join(dir, "tokgo", "targets.txt"), []string{"alpha", "beta"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	m := newModel()
+	m.loadSaved()
+	if !slices.Equal(m.list, []string{"alpha", "beta"}) {
+		t.Fatalf("list = %q, want [alpha beta]", m.list)
+	}
+	if len(m.targets) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(m.targets))
+	}
+	for _, want := range []string{"alpha", "beta"} {
+		i, ok := m.byName[want]
+		if !ok || !m.targets[i].idle || m.targets[i].phase.Active() {
+			t.Fatalf("row for %s: %+v", want, m.targets)
+		}
+	}
+	v := m.View()
+	for _, want := range []string{"@alpha", "@beta", "idle", "2 saved"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("view missing %q:\n%s", want, v)
+		}
+	}
+}
+
+func TestStartCommand(t *testing.T) {
+	cases := []struct {
+		name      string
+		line      string
+		saved     []string
+		running   bool
+		wantUsers []string
+		wantAdded []string
+		wantLog   string
+	}{
+		{name: "idle starts the one", line: "/start alpha", wantUsers: []string{"alpha"}},
+		{name: "idle starts them all", line: "/start all", saved: []string{"alpha", "beta"}, wantUsers: []string{"alpha", "beta"}},
+		{name: "running adds the one", line: "/start beta", saved: []string{"alpha"}, running: true, wantAdded: []string{"beta"}},
+		{name: "running adds them all", line: "/start all", saved: []string{"alpha", "beta"}, running: true, wantAdded: []string{"alpha", "beta"}},
+		{name: "all with nothing saved", line: "/start all", wantLog: "no saved targets · /add <name>"},
+		{name: "bare start", line: "/start", wantLog: "start needs a username or all"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newModel()
+			m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+			m.list = append([]string(nil), tc.saved...)
+			m.syncRows()
+			var ctrl *fakeCtrl
+			if tc.running {
+				ctrl = &fakeCtrl{}
+				m.ctrl = ctrl
+			}
+			cmd := submit(m, tc.line)
+			switch {
+			case tc.wantLog != "":
+				if got := logText(m); !strings.Contains(got, tc.wantLog) {
+					t.Fatalf("activity missing %q:\n%s", tc.wantLog, got)
+				}
+				if cmd != nil {
+					t.Fatal("a rejected command must not start a run")
+				}
+			case tc.running:
+				if cmd != nil {
+					t.Fatal("adding to a live run must not start a second run")
+				}
+				if !slices.Equal(ctrl.added, tc.wantAdded) {
+					t.Fatalf("added = %q, want %q", ctrl.added, tc.wantAdded)
+				}
+			default:
+				if m.ctrl == nil {
+					t.Fatal("the runner was not installed")
+				}
+				if !slices.Equal(m.users, tc.wantUsers) {
+					t.Fatalf("run users = %q, want %q", m.users, tc.wantUsers)
+				}
+				if cmd == nil {
+					t.Fatal("starting a run must return the tea.Cmd that runs it")
+				}
+				if _, ok := cmd().(runDoneMsg); !ok {
+					t.Fatal("the run command must report runDoneMsg")
+				}
+			}
+		})
+	}
+}
+
+// TestStartAllRemembersUndSavedNamesOrder proves /start all follows the list
+// order the file keeps.
+func TestStartAllUsesTheSavedOrder(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	m.list = []string{"beta", "alpha"}
+	m.syncRows()
+	submit(m, "/start all")
+	if !slices.Equal(m.users, []string{"beta", "alpha"}) {
+		t.Fatalf("users = %q, want the list order", m.users)
+	}
+}
+
+// TestSeedKeepsSavedRowsAndQueuesTheRun proves a new run clears the previous
+// terminal phases without dropping a saved name.
+func TestSeedKeepsSavedRowsAndQueuesTheRun(t *testing.T) {
+	m := newModel()
+	m.list = []string{"alpha", "beta"}
+	m.syncRows()
+	m.applyStatus(app.Status{User: "alpha", Phase: app.PhaseRecording, Bytes: 4096})
+	m.applyStatus(app.Status{User: "alpha", Phase: app.PhaseDone})
+
+	m.seed(config.Config{}, []string{"alpha"}, m.now)
+	if len(m.targets) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(m.targets))
+	}
+	alpha := m.targets[m.byName["alpha"]]
+	if alpha.idle || alpha.phase != app.PhaseQueued || alpha.bytes != 0 {
+		t.Fatalf("the run row must be reset: %+v", alpha)
+	}
+	beta := m.targets[m.byName["beta"]]
+	if !beta.idle || beta.phase != app.PhaseQueued {
+		t.Fatalf("a saved name must stay idle: %+v", beta)
+	}
+}
+
+// TestRestartWhileRunningDropsThenReadds is the stop, remux, start again
+// ordering: the name is only handed back to the runner once its own terminal
+// status arrives.
+func TestRestartWhileRunningDropsThenReadds(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	ctrl := &fakeCtrl{}
+	m.ctrl = ctrl
+
+	if cmd := submit(m, "/restart @alpha"); cmd != nil {
+		t.Fatal("restart must not start a second run")
+	}
+	if !slices.Equal(ctrl.dropped, []string{"alpha"}) {
+		t.Fatalf("dropped = %q, want [alpha]", ctrl.dropped)
+	}
+	if len(ctrl.added) != 0 {
+		t.Fatalf("must not re-add before the run is gone: %q", ctrl.added)
+	}
+	if !slices.Equal(m.restarting, []string{"alpha"}) {
+		t.Fatalf("restarting = %q, want [alpha]", m.restarting)
+	}
+	if got := logText(m); !strings.Contains(got, "restarting @alpha") {
+		t.Fatalf("activity missing the restart line:\n%s", got)
+	}
+
+	m.applyStatus(app.Status{User: "beta", Phase: app.PhaseStopped})
+	if len(ctrl.added) != 0 {
+		t.Fatalf("another target's status must not restart alpha: %q", ctrl.added)
+	}
+	if !slices.Equal(m.restarting, []string{"alpha"}) {
+		t.Fatalf("restarting = %q, want [alpha]", m.restarting)
+	}
+
+	m.applyStatus(app.Status{User: "alpha", Phase: app.PhaseRecording})
+	if len(ctrl.added) != 0 || len(m.restarting) != 1 {
+		t.Fatalf("an active status must not trigger the restart: added %q restarting %q", ctrl.added, m.restarting)
+	}
+
+	m.applyStatus(app.Status{User: "alpha", Phase: app.PhaseDone})
+	if !slices.Equal(ctrl.added, []string{"alpha"}) {
+		t.Fatalf("added = %q, want [alpha]", ctrl.added)
+	}
+	if len(m.restarting) != 0 {
+		t.Fatalf("the queue must be cleared: %q", m.restarting)
+	}
+}
+
+// TestRestartWithNothingToDropStartsIt proves a name the run does not hold is
+// just added.
+func TestRestartWithNothingToDropStartsIt(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	ctrl := &fakeCtrl{dropMiss: true}
+	m.ctrl = ctrl
+
+	if cmd := submit(m, "/restart alpha"); cmd != nil {
+		t.Fatal("adding to the live run must not start a second run")
+	}
+	if !slices.Equal(ctrl.added, []string{"alpha"}) {
+		t.Fatalf("added = %q, want [alpha]", ctrl.added)
+	}
+	if len(m.restarting) != 0 {
+		t.Fatalf("nothing was stopped, so nothing is queued: %q", m.restarting)
+	}
+}
+
+// TestRestartSurvivesTheRunBoundary proves a run that ends before the terminal
+// status arrives still restarts the target.
+func TestRestartSurvivesTheRunBoundary(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	first := &fakeCtrl{}
+	m.ctrl = first
+	m.makeRunner = func(config.Config, telegram.Config) controller {
+		return &fakeCtrl{}
+	}
+
+	submit(m, "/restart alpha")
+	if len(m.restarting) != 1 {
+		t.Fatalf("restarting = %q, want [alpha]", m.restarting)
+	}
+
+	_, cmd := m.Update(runDoneMsg{})
+	if m.ctrl == nil || m.ctrl == first {
+		t.Fatal("runDoneMsg must launch a fresh run")
+	}
+	if cmd == nil {
+		t.Fatal("the fresh run needs its own tea.Cmd")
+	}
+	if _, ok := cmd().(runDoneMsg); !ok {
+		t.Fatal("the run command must report runDoneMsg")
+	}
+	if !slices.Equal(m.users, []string{"alpha"}) {
+		t.Fatalf("run users = %q, want [alpha]", m.users)
+	}
+	if len(m.restarting) != 0 {
+		t.Fatalf("the queue must be consumed: %q", m.restarting)
+	}
+}
+
+func TestRestartWhenIdleStartsTheRun(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	cmd := submit(m, "/restart alpha")
+	if m.ctrl == nil {
+		t.Fatal("restart while idle must start the run")
+	}
+	if cmd == nil {
+		t.Fatal("starting a run must return the tea.Cmd that runs it")
+	}
+	if !slices.Equal(m.users, []string{"alpha"}) {
+		t.Fatalf("run users = %q, want [alpha]", m.users)
+	}
+	if !slices.Equal(loadTargets(m.userPath), []string{"alpha"}) {
+		t.Fatal("restart must remember the name")
+	}
+}
+
+// TestStopClearsTheRestartQueue proves an explicit stop never restarts anything.
+func TestDropCancelsAQueuedRestart(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	ctrl := &fakeCtrl{}
+	m.ctrl = ctrl
+
+	submit(m, "/restart alpha")
+	if len(m.restarting) != 1 {
+		t.Fatalf("restarting = %q, want [alpha]", m.restarting)
+	}
+	submit(m, "/drop alpha")
+	if len(m.restarting) != 0 {
+		t.Fatalf("a drop after a restart must cancel it: %q", m.restarting)
+	}
+
+	// The terminal status of the dropped target must not bring it back.
+	m.applyStatus(app.Status{User: "alpha", Phase: app.PhaseStopped})
+	if len(ctrl.added) != 0 {
+		t.Fatalf("added = %q, want nothing", ctrl.added)
+	}
+}
+
+func TestStopClearsTheRestartQueue(t *testing.T) {
+	m := newModel()
+	m.ctrl = &fakeCtrl{}
+	m.restarting = []string{"alpha"}
+	m.stopRun()
+	if len(m.restarting) != 0 {
+		t.Fatalf("stopping must drop the queue: %q", m.restarting)
+	}
+
+	_, cmd := m.Update(runDoneMsg{})
+	if cmd != nil {
+		t.Fatal("nothing may relaunch after a stop")
+	}
+	if m.ctrl != nil {
+		t.Fatal("a stopped run must stay stopped")
+	}
+}
+
+// TestEventAppliesTheStatus proves the event path keeps both the merge and the
+// channel wait.
+func TestEventAppliesTheStatus(t *testing.T) {
+	m := newModel()
+	st := app.Status{User: "alpha", Phase: app.PhaseWaiting}
+	_, cmd := m.Update(event{st: &st})
+	if cmd == nil {
+		t.Fatal("the status event must keep waiting for the next event")
+	}
+	i, ok := m.byName["alpha"]
+	if !ok || m.targets[i].phase != app.PhaseWaiting {
+		t.Fatalf("the status was not merged: %+v", m.targets)
+	}
+}
+
+func TestMaskSecret(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", "••••"},
+		{"abcd", "••••"},
+		{"abcde", "••••bcde"},
+		{"supersecretsession42", "••••on42"},
+	}
+	for _, tc := range cases {
+		if got := maskSecret(tc.in); got != tc.want {
+			t.Fatalf("maskSecret(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestCookiesCommandWritesTheJar proves a typed cookie reaches the next launch,
+// and that neither the screen nor the history ring ever shows it.
+func TestCookiesCommandWritesTheJar(t *testing.T) {
+	t.Chdir(t.TempDir())
+	const raw = "supersecretsession42"
+	m := newModel()
+	if err := os.WriteFile(boot.CookieFile, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	submit(m, "/cookies "+raw)
+	if got := m.cookies["sessionid_ss"]; got != raw {
+		t.Fatalf("cookie = %q, want the typed value", got)
+	}
+	body, err := os.ReadFile(boot.CookieFile)
+	if err != nil {
+		t.Fatalf("read jar: %v", err)
+	}
+	if !strings.Contains(string(body), raw) {
+		t.Fatalf("the jar is missing the value:\n%s", body)
+	}
+	info, err := os.Stat(boot.CookieFile)
+	if err != nil {
+		t.Fatalf("stat jar: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("jar mode = %o, want 600", got)
+	}
+
+	logs := logText(m)
+	if strings.Contains(logs, raw) {
+		t.Fatalf("the raw cookie reached the activity pane:\n%s", logs)
+	}
+	if !strings.Contains(logs, "••••on42") || !strings.Contains(logs, "saved to cookies.json") {
+		t.Fatalf("activity missing the masked confirmation:\n%s", logs)
+	}
+	if slices.Contains(m.history, "/cookies "+raw) {
+		t.Fatalf("the cookie must not enter the recall ring: %q", m.history)
+	}
+}
+
+func TestCookiesCommandReportsTheMaskAlone(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	m := newModel()
+	submit(m, "/cookies")
+	if got := logText(m); !strings.Contains(got, "no sessionid_ss set · /cookies <value>") {
+		t.Fatalf("activity should say what is missing:\n%s", got)
+	}
+
+	m.cookies = map[string]string{"sessionid_ss": "supersecretsession42"}
+	submit(m, "/cookies")
+	got := logText(m)
+	if !strings.Contains(got, "sessionid_ss ••••on42") {
+		t.Fatalf("activity should report the mask:\n%s", got)
+	}
+	if strings.Contains(got, "supersecretsession42") {
+		t.Fatalf("the raw cookie reached the activity pane:\n%s", got)
+	}
+}
+
+func TestCookiesWhileRunningAppliesToTheNextRun(t *testing.T) {
+	t.Chdir(t.TempDir())
+	m := newModel()
+	m.ctrl = &fakeCtrl{}
+	submit(m, "/cookies short")
+	got := logText(m)
+	if !strings.Contains(got, "cookies applies to the next run") {
+		t.Fatalf("activity should say the change waits:\n%s", got)
+	}
+	if strings.Contains(got, "short") {
+		t.Fatalf("the raw cookie reached the activity pane:\n%s", got)
+	}
+}
+
+// TestHelpPrintsEveryCommand proves the help and the completion come from one
+// table, so a command cannot be half documented.
+func TestHelpPrintsEveryCommand(t *testing.T) {
+	m := newModel()
+	submit(m, "/help")
+	help := logText(m)
+	for _, c := range commands {
+		line := padRight("/"+c.name+" "+c.args, 18) + " " + c.help
+		if !strings.Contains(help, line) {
+			t.Fatalf("help is missing %q:\n%s", line, help)
+		}
+	}
+	if got, want := len(m.logs), len(commands); got != want {
+		t.Fatalf("help printed %d lines, want %d", got, want)
+	}
+}
+
+func TestCompletion(t *testing.T) {
+	cases := []struct {
+		name  string
+		saved []string
+		live  []string
+		typed string
+		tabs  int
+		want  []string
+	}{
+		{name: "bare command fills the prefix", typed: "/st", tabs: 1, want: []string{"/start "}},
+		{name: "single name completes fully", saved: []string{"alpha"}, typed: "/restart al", tabs: 1, want: []string{"/restart alpha"}},
+		{name: "drop completes from the list", saved: []string{"alpha"}, typed: "/drop al", tabs: 1, want: []string{"/drop alpha"}},
+		{name: "add completes from the list", saved: []string{"alpha"}, typed: "/add al", tabs: 1, want: []string{"/add alpha"}},
+		{
+			name:  "start cycles all and a name",
+			saved: []string{"allan"},
+			typed: "/start al",
+			tabs:  4,
+			want:  []string{"/start all", "/start all", "/start allan", "/start allan"},
+		},
+		{
+			name:  "a live target completes too",
+			live:  []string{"gamma"},
+			typed: "/restart g",
+			tabs:  1,
+			want:  []string{"/restart gamma"},
+		},
+		{
+			name:  "telegram fills the prefix then the first mode",
+			typed: "/telegram ",
+			tabs:  3,
+			want:  []string{"/telegram o", "/telegram on", "/telegram on"},
+		},
+		{name: "plain text is left alone", typed: "alpha", tabs: 1, want: []string{"alpha"}},
+		{name: "a second word is left alone", saved: []string{"alpha"}, typed: "/start alpha ", tabs: 1, want: []string{"/start alpha "}},
+		{name: "a comma list is left alone", saved: []string{"alpha"}, typed: "/add al,be", tabs: 1, want: []string{"/add al,be"}},
+		{name: "an unknown command has no argument completion", typed: "/nope ", tabs: 1, want: []string{"/nope "}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newModel()
+			m.list = append([]string(nil), tc.saved...)
+			m.syncRows()
+			for _, user := range tc.live {
+				m.applyStatus(app.Status{User: user, Phase: app.PhaseRecording})
+			}
+			m.input.SetValue(tc.typed)
+			got := make([]string, 0, len(tc.want))
+			for range tc.want {
+				m.Update(key("tab"))
+				got = append(got, m.input.Value())
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("tabs on %q = %q, want %q", tc.typed, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCandidates covers the pool tab offers before any cycling: whole lines,
+// in list order, then whatever the run holds.
+func TestCandidates(t *testing.T) {
+	cases := []struct {
+		name  string
+		saved []string
+		live  []string
+		value string
+		want  []string
+	}{
+		{name: "command prefix", value: "/st", want: []string{"/start", "/stop"}},
+		{name: "telegram modes", value: "/telegram ", want: []string{"/telegram on", "/telegram off"}},
+		{name: "start lists all first", saved: []string{"allan"}, value: "/start ", want: []string{"/start all", "/start allan"}},
+		{name: "start by prefix", saved: []string{"beta"}, value: "/start a", want: []string{"/start all"}},
+		{name: "saved then live", saved: []string{"alpha"}, live: []string{"gamma"}, value: "/restart ", want: []string{"/restart alpha", "/restart gamma"}},
+		{name: "drop", saved: []string{"alpha"}, value: "/drop ", want: []string{"/drop alpha"}},
+		{name: "no plain text", value: "alpha"},
+		{name: "no commas", saved: []string{"alpha"}, value: "/add al,be"},
+		{name: "no second word", saved: []string{"alpha"}, value: "/start alpha "},
+		{name: "no arguments for another command", value: "/nope "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newModel()
+			m.list = append([]string(nil), tc.saved...)
+			m.syncRows()
+			for _, user := range tc.live {
+				m.applyStatus(app.Status{User: user, Phase: app.PhaseRecording})
+			}
+			if got := m.candidates(tc.value); !slices.Equal(got, tc.want) {
+				t.Fatalf("candidates(%q) = %q, want %q", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTypingResetsTheCycle proves a key after a completion starts the cycle over
+// instead of resuming mid list.
+func TestTypingResetsTheCycle(t *testing.T) {
+	m := newModel()
+	m.list = []string{"allan"}
+	m.syncRows()
+	m.input.SetValue("/start al")
+	m.Update(key("tab"))
+	m.Update(key("tab"))
+	if m.compIdx == 0 {
+		t.Fatal("the second tab must advance the cycle")
+	}
+	m.Update(key("x"))
+	if m.compIdx != 0 {
+		t.Fatalf("typing must reset the cycle, got %d", m.compIdx)
+	}
+}
+
+func TestHintLine(t *testing.T) {
+	m := newModel()
+	if got := m.hintLine(); !strings.Contains(got, "ctrl+c stop") {
+		t.Fatalf("the empty input must show the key reminder, got %q", got)
+	}
+
+	m.list = []string{"alpha"}
+	m.syncRows()
+	m.input.SetValue("/st")
+	got := m.hintLine()
+	for _, want := range []string{"tab", "/start"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("hint %q is missing %q", got, want)
+		}
+	}
+
+	m.input.SetValue("/start a")
+	if got := m.hintLine(); !strings.Contains(got, "/start alpha") {
+		t.Fatalf("hint %q is missing the name candidate", got)
+	}
+}
+
+// TestCompletionRespectsTheValue proves an argument already typed is not
+// replaced with an unrelated name.
+func TestCompletionLeavesAnExactValueAlone(t *testing.T) {
+	m := newModel()
+	m.list = []string{"alpha"}
+	m.syncRows()
+	m.input.SetValue("/restart alpha")
+	m.Update(key("tab"))
+	if got := m.input.Value(); got != "/restart alpha" {
+		t.Fatalf("input = %q, want the value unchanged", got)
+	}
+}
+
+// TestRememberRefusesWhatCannotBeSaved proves a url or a room id still runs, but
+// never lands in the list.
+func TestRememberRefusesWhatCannotBeSaved(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	m.remember([]string{"7123456789012345678", "https://www.tiktok.com/@a/live", "bad/name", "x", "alpha"})
+	if !slices.Equal(m.list, []string{"alpha"}) {
+		t.Fatalf("list = %q, want [alpha]", m.list)
+	}
+	if got := loadTargets(m.userPath); !slices.Equal(got, []string{"alpha"}) {
+		t.Fatalf("saved = %q, want [alpha]", got)
+	}
+	if got := logText(m); strings.Count(got, "only usernames are saved") != 2 {
+		t.Fatalf("each rejected target needs its own warning:\n%s", got)
+	}
+	if got := logText(m); strings.Count(got, "not a username") != 2 {
+		t.Fatalf("each malformed name needs its own warning:\n%s", got)
+	}
+}
+
+func TestIsUsername(t *testing.T) {
+	for _, name := range []string{"aljazeeraenglish", "donut_ntp.42", "a_b.c1", "AB"} {
+		if !isUsername(name) {
+			t.Errorf("isUsername(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"", "a", "bad/name", "two words", "tab\there", "a@b", strings.Repeat("a", 25)} {
+		if isUsername(name) {
+			t.Errorf("isUsername(%q) = true, want false", name)
 		}
 	}
 }
