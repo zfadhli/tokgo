@@ -16,7 +16,6 @@ import (
 	"tokgo/internal/app"
 	"tokgo/internal/boot"
 	"tokgo/internal/cli"
-	"tokgo/internal/config"
 	"tokgo/internal/logx"
 	"tokgo/internal/telegram"
 )
@@ -49,7 +48,7 @@ func inputFor(focus int) int {
 	return -1
 }
 
-var modeNames = []string{"manual", "automatic", "followers"}
+var modeNames = []string{"wait for live", "record now"}
 
 // maxLogLines bounds the retained scrollback; the view only ever shows the tail.
 const maxLogLines = 2000
@@ -345,7 +344,10 @@ func (m *Model) start() tea.Cmd {
 // argv renders the form as the equivalent command line. Everything the form can
 // express goes through the same parser the flags use.
 func (m *Model) argv() []string {
-	args := []string{"-mode", modeNames[m.mode]}
+	var args []string
+	if m.mode == 1 {
+		args = append(args, "-now")
+	}
 	target := strings.TrimSpace(m.inputs[0].Value())
 	switch {
 	case target == "":
@@ -383,9 +385,6 @@ func isRoomID(s string) bool {
 func (m *Model) targetLabel() string {
 	if t := strings.TrimSpace(m.inputs[0].Value()); t != "" {
 		return t
-	}
-	if config.Mode(m.mode) == config.Followers {
-		return "everyone you follow"
 	}
 	return "unset"
 }

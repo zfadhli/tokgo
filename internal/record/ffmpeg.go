@@ -22,7 +22,7 @@ const (
 // nil error means the returned path is the usable recording; the segments and
 // the concat list are removed on success. On failure every segment is kept and
 // the last one is returned, so no captured byte is lost.
-func Convert(ctx context.Context, segments []string, bitrate, ffmpegPath string) (string, error) {
+func Convert(ctx context.Context, segments []string, ffmpegPath string) (string, error) {
 	if len(segments) == 0 {
 		return "", errors.New("no capture segments")
 	}
@@ -43,7 +43,7 @@ func Convert(ctx context.Context, segments []string, bitrate, ffmpegPath string)
 		input, concat = list, true
 	}
 	out := outputPath(segments[0])
-	cmd := exec.CommandContext(ctx, ffmpegPath, ffmpegArgs(input, out, bitrate, concat)...)
+	cmd := exec.CommandContext(ctx, ffmpegPath, ffmpegArgs(input, out, concat)...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return last, fmt.Errorf("ffmpeg %s: %w: %s", segments[0], err, tail(output, stderrTail))
@@ -56,17 +56,12 @@ func Convert(ctx context.Context, segments []string, bitrate, ffmpegPath string)
 	return out, nil
 }
 
-func ffmpegArgs(in, out, bitrate string, concat bool) []string {
+func ffmpegArgs(in, out string, concat bool) []string {
 	args := []string{"-y"}
 	if concat {
 		args = append(args, "-f", "concat", "-safe", "0")
 	}
-	args = append(args, "-i", in)
-	if bitrate != "" {
-		args = append(args, "-c:v", "libx264", "-b:v", bitrate, "-c:a", "copy")
-	} else {
-		args = append(args, "-c", "copy")
-	}
+	args = append(args, "-i", in, "-c", "copy")
 	return append(args, out)
 }
 

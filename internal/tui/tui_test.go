@@ -27,31 +27,32 @@ func TestArgv(t *testing.T) {
 		want   []string
 	}{
 		{
-			name:   "username",
+			name:   "username waits for live by default",
 			target: "@aljazeeraenglish",
 			dur:    "60",
-			want:   []string{"-mode", "manual", "-user", "@aljazeeraenglish", "-duration", "60"},
+			want:   []string{"-user", "@aljazeeraenglish", "-duration", "60"},
 		},
 		{
 			name:   "room id wins over username shape",
 			target: "7123456789012345678",
 			dur:    "0",
-			want:   []string{"-mode", "manual", "-room_id", "7123456789012345678", "-duration", "0"},
+			want:   []string{"-room_id", "7123456789012345678", "-duration", "0"},
 		},
 		{
 			name:   "url",
 			target: "https://www.tiktok.com/@user/live",
 			dur:    "0",
-			want:   []string{"-mode", "manual", "-url", "https://www.tiktok.com/@user/live", "-duration", "0"},
+			want:   []string{"-url", "https://www.tiktok.com/@user/live", "-duration", "0"},
 		},
 		{
-			name:   "followers needs no target",
-			mode:   2,
+			name:   "record now carries the rest of the form",
+			mode:   1,
+			target: "@someone",
 			dur:    "0",
 			upload: true,
 			out:    "/tmp/rec",
 			proxy:  "socks5://127.0.0.1:1080",
-			want: []string{"-mode", "followers", "-duration", "0", "-output", "/tmp/rec",
+			want: []string{"-now", "-user", "@someone", "-duration", "0", "-output", "/tmp/rec",
 				"-proxy", "socks5://127.0.0.1:1080", "-telegram"},
 		},
 	}
@@ -89,7 +90,7 @@ func TestFormViewMentionsMode(t *testing.T) {
 	m := newModel()
 	m.width, m.height = 100, 30
 	v := m.View()
-	for _, want := range []string{"tokgo", "manual", "automatic", "followers", "Target", "Start"} {
+	for _, want := range []string{"tokgo", "wait for live", "record now", "Target", "Start"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("form view missing %q:\n%s", want, v)
 		}

@@ -18,7 +18,6 @@ import (
 var (
 	flvPattern    = regexp.MustCompile(`https?://[^\s"'<>]+\.flv[^\s"'<>]*`)
 	hlsPattern    = regexp.MustCompile(`https?://[^\s"'<>]+\.m3u8[^\s"'<>]*`)
-	secUIDPattern = regexp.MustCompile(`"secUid":"(.*?)",`)
 	shortlinkUser = regexp.MustCompile(`com/@(.*?)/live`)
 	liveURLUser   = regexp.MustCompile(`^https?://(?:www\.)?tiktok\.com/@([^/]+)/live`)
 )
@@ -196,88 +195,6 @@ func (c *Client) CountryBlocked(ctx context.Context) (bool, error) {
 	return resp.StatusCode == http.StatusFound, nil
 }
 
-// SecUID returns the session's secUid, or "" when the page carries none.
-func (c *Client) SecUID(ctx context.Context) (string, error) {
-	resp, err := c.get(ctx, c.base+"/foryou", false)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	match := secUIDPattern.FindStringSubmatch(string(body))
-	if match == nil {
-		return "", nil
-	}
-	return match[1], nil
-}
-
-// followersQuery is the reference tool's user list query. Placeholders stand in
-// for the values that change per request; the rest is kept byte-identical.
-const followersQuery = "WebIdLastTime=1747672102&aid=1988&app_language=it-IT&app_name=tiktok_web&browser_language=it-IT&browser_name=Mozilla&browser_online=true&browser_platform=Linux%20x86_64&browser_version=5.0%20%28X11%3B%20Linux%20x86_64%29%20AppleWebKit%2F537.36%20%28KHTML%2C%20like%20Gecko%29%20Chrome%2F140.0.0.0%20Safari%2F537.36&channel=tiktok_web&cookie_enabled=true&count=5&data_collection_enabled=true&device_id=7506194516308166166&device_platform=web_pc&focus_state=true&from_page=user&history_len=3&is_fullscreen=false&is_page_visible=true&maxCursor={cursor}&minCursor={cursor}&odinId=7246312836442604570&os=linux&priority_region=IT&referer=&region=IT&scene=21&screen_height=1080&screen_width=1920&tz_name=Europe%2FRome&user_is_login=true&secUid={secUid}&verifyFp=verify_mh4yf0uq_rdjp1Xwt_OoTk_4Jrf_AS8H_sp31opbnJFre&webcast_language=it-IT&msToken={msToken}&X-Bogus=&X-Gnarly="
-
-// Followers lists every follower's uniqueId. The first request only exists to
-// collect the msToken cookie the paged endpoint requires.
-func (c *Client) Followers(ctx context.Context, secUID string) ([]string, error) {
-	prime := strings.NewReplacer("{cursor}", "0", "{secUid}", secUID, "{msToken}", "").Replace(followersQuery)
-	if resp, err := c.get(ctx, c.base+"/api/user/list/?"+prime, false); err == nil {
-		resp.Body.Close()
-	}
-	token := c.msToken()
-
-	cursor := "0"
-	var users []string
-	for {
-		page := strings.NewReplacer("{cursor}", cursor, "{secUid}", secUID, "{msToken}", token).Replace(followersQuery)
-
-		resp, err := c.get(ctx, c.base+"/api/user/list/?"+page, false)
-		if err != nil {
-			return nil, err
-		}
-		status := resp.StatusCode
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return nil, err
-		}
-		if status != http.StatusOK {
-			return nil, errors.New("failed to retrieve followers list")
-		}
-		if len(strings.TrimSpace(string(body))) == 0 {
-			return nil, errors.New("empty response from the TikTok followers API")
-		}
-		var payload struct {
-			UserList []struct {
-				User struct {
-					UniqueID string `json:"uniqueId"`
-				} `json:"user"`
-			} `json:"userList"`
-			HasMore   bool       `json:"hasMore"`
-			MinCursor FlexString `json:"minCursor"`
-		}
-		if err := json.Unmarshal(body, &payload); err != nil {
-			return nil, err
-		}
-		for _, entry := range payload.UserList {
-			if entry.User.UniqueID != "" {
-				users = append(users, entry.User.UniqueID)
-			}
-		}
-
-		next := string(payload.MinCursor)
-		if !payload.HasMore || next == "" || next == cursor {
-			break
-		}
-		cursor = next
-	}
-	if len(users) == 0 {
-		return nil, errors.New("no followers found")
-	}
-	return users, nil
-}
-
 // OpenStream hands back the response body of a stream url, unbuffered, so the
 // recorder can copy it straight to disk.
 func (c *Client) OpenStream(ctx context.Context, streamURL string) (io.ReadCloser, error) {
@@ -395,19 +312,6 @@ func (c *Client) eulerRoomID(ctx context.Context, user string) (string, error) {
 		return "", ErrRoomID
 	}
 	return string(payload.Data.RoomInfo.ID), nil
-}
-
-func (c *Client) msToken() string {
-	site, err := url.Parse(c.base + "/")
-	if err != nil {
-		return ""
-	}
-	for _, cookie := range c.hc.Jar.Cookies(site) {
-		if cookie.Name == "msToken" {
-			return cookie.Value
-		}
-	}
-	return ""
 }
 
 func decodeInto(resp *http.Response, v any) error {

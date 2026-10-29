@@ -1,12 +1,11 @@
-// Package app drives the recording modes: one-shot capture, liveness polling,
-// and follow-everyone capture. It owns resolution order and retry policy.
+// Package app drives the recording modes: one-shot capture and liveness polling.
+// It owns resolution order and retry policy.
 package app
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -43,7 +42,6 @@ func New(cfg config.Config, uploads telegram.Config) *Runner {
 		rec: record.New(stream, record.Options{
 			OutputDir:  cfg.OutputDir,
 			Duration:   cfg.Duration,
-			Bitrate:    cfg.Bitrate,
 			FFmpegPath: cfg.FFmpegPath,
 		}),
 		uploads: uploads,
@@ -53,9 +51,6 @@ func New(cfg config.Config, uploads telegram.Config) *Runner {
 // Run executes the configured mode for the given users (one user unless the CLI
 // was given a comma-separated list) and blocks until done or cancelled.
 func (r *Runner) Run(ctx context.Context, users []string) error {
-	if r.cfg.Mode == config.Followers {
-		return r.followers(ctx)
-	}
 	if len(users) > 1 {
 		return r.parallel(ctx, users)
 	}
@@ -63,16 +58,20 @@ func (r *Runner) Run(ctx context.Context, users []string) error {
 	if len(users) > 0 {
 		user = users[0]
 	}
-	var err error
-	if r.cfg.Mode == config.Automatic {
-		err = r.automatic(ctx, user)
-	} else {
-		err = r.manual(ctx, user)
-	}
-	if err != nil && user != "" {
+	if err := r.loop()(ctx, user); err != nil && user != "" {
 		return fmt.Errorf("@%s: %w", user, err)
+	} else if err != nil {
+		return err
 	}
-	return err
+	return nil
+}
+
+// loop picks the wait-for-live poll or the single immediate attempt.
+func (r *Runner) loop() func(context.Context, string) error {
+	if r.cfg.Now {
+		return r.once
+	}
+	return r.automatic
 }
 
 // ErrReported marks failures that were already logged per user, so main can
@@ -89,13 +88,7 @@ func (r *Runner) parallel(ctx context.Context, users []string) error {
 		wg.Add(1)
 		go func(user string) {
 			defer wg.Done()
-			var err error
-			if r.cfg.Mode == config.Automatic {
-				err = r.automatic(ctx, user)
-			} else {
-				err = r.manual(ctx, user)
-			}
-			if err != nil && ctx.Err() == nil {
+			if err := r.loop()(ctx, user); err != nil && ctx.Err() == nil {
 				logx.Errorf("@%s: %v", user, err)
 				mu.Lock()
 				fails++
@@ -146,17 +139,13 @@ func (r *Runner) countryGuard(ctx context.Context) error {
 	if !blocked {
 		return nil
 	}
-	switch r.cfg.Mode {
-	case config.Followers:
-		return tiktok.ErrCountryFollow
-	case config.Automatic:
-		return tiktok.ErrCountryAuto
-	default:
+	if r.cfg.Now {
 		return tiktok.ErrCountryBlocked
 	}
+	return tiktok.ErrCountryAuto
 }
 
-func (r *Runner) manual(ctx context.Context, user string) error {
+func (r *Runner) once(ctx context.Context, user string) error {
 	user, roomID, err := r.resolve(ctx, user, r.cfg.RoomID)
 	if err != nil {
 		return err
@@ -246,122 +235,6 @@ func (r *Runner) automatic(ctx context.Context, user string) error {
 			return nil
 		}
 	}
-}
-
-func (r *Runner) followers(ctx context.Context) error {
-	if !hasSessionCookie(r.cfg.Cookies) {
-		return errors.New("followers mode needs a logged-in session: add sessionid_ss to cookies.json")
-	}
-	secUID, err := r.lookup.SecUID(ctx)
-	if err != nil {
-		return err
-	}
-	if secUID == "" {
-		return errors.New("failed to retrieve sec_uid from the logged-out TikTok session, add cookies.json")
-	}
-	if err := r.countryGuard(ctx); err != nil {
-		return err
-	}
-	logx.Infof("followers mode activated")
-
-	active := newRegistry()
-	interval := time.Duration(r.cfg.AutomaticInterval) * time.Minute
-
-	for {
-		followers, err := r.lookup.Followers(ctx, secUID)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			logx.Errorf("followers list: %v", err)
-			if !sleep(ctx, interval) {
-				return nil
-			}
-			continue
-		}
-
-		for _, follower := range followers {
-			if ctx.Err() != nil {
-				return nil
-			}
-			if active.running(follower) {
-				continue
-			}
-
-			roomID, err := r.lookup.RoomIDForUser(ctx, follower)
-			if err != nil || roomID == "" {
-				continue
-			}
-			alive, err := r.lookup.RoomAlive(ctx, roomID)
-			if err != nil || !alive {
-				continue
-			}
-
-			logx.Infof("@%s is live, starting recording", follower)
-			childCtx, cancel := context.WithCancel(ctx)
-			active.start(follower, cancel)
-			go func() {
-				defer func() {
-					cancel()
-					active.finish(follower)
-				}()
-				if err := r.capture(childCtx, follower, roomID); err != nil && childCtx.Err() == nil {
-					logx.Errorf("@%s: %v", follower, err)
-				}
-				logx.Infof("recording of @%s finished", follower)
-			}()
-
-			if !sleep(ctx, streamStartGap) {
-				return nil
-			}
-		}
-
-		logx.Infof("waiting %d minutes for the next followers check", r.cfg.AutomaticInterval)
-		if !sleep(ctx, interval) {
-			return nil
-		}
-	}
-}
-
-// registry tracks which followers already have a recording in flight. Capture
-// goroutines mark themselves done from their own goroutine, so every access is
-// guarded.
-type registry struct {
-	mu sync.Mutex
-	in map[string]context.CancelFunc
-}
-
-func newRegistry() *registry { return &registry{in: map[string]context.CancelFunc{}} }
-
-func (g *registry) running(follower string) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	_, busy := g.in[strings.ToLower(follower)]
-	return busy
-}
-
-func (g *registry) start(follower string, cancel context.CancelFunc) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.in[strings.ToLower(follower)] = cancel
-}
-
-func (g *registry) finish(follower string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	delete(g.in, strings.ToLower(follower))
-}
-
-// hasSessionCookie reports whether the cookie set can act as a logged-in
-// session. TikTok's anonymous pages embed a random secUid, so without this
-// check followers mode would poll a stranger's follower list forever.
-func hasSessionCookie(cookies map[string]string) bool {
-	for _, name := range []string{"sessionid", "sessionid_ss"} {
-		if cookies[name] != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {

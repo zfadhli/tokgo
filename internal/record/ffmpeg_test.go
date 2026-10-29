@@ -24,24 +24,13 @@ func TestOutputPathFromSegment(t *testing.T) {
 
 func TestFFmpegArgs(t *testing.T) {
 	cases := []struct {
-		name    string
-		bitrate string
-		concat  bool
-		want    []string
+		name   string
+		concat bool
+		want   []string
 	}{
 		{
-			name:    "stream copy without bitrate",
-			bitrate: "",
-			want:    []string{"-y", "-i", "a=20250101_000000.000.ts", "-c", "copy", "a=20250101_000000.mp4"},
-		},
-		{
-			name:    "re-encode video with bitrate",
-			bitrate: "1500k",
-			want: []string{
-				"-y", "-i", "a=20250101_000000.000.ts",
-				"-c:v", "libx264", "-b:v", "1500k", "-c:a", "copy",
-				"a=20250101_000000.mp4",
-			},
+			name: "stream copy",
+			want: []string{"-y", "-i", "a=20250101_000000.000.ts", "-c", "copy", "a=20250101_000000.mp4"},
 		},
 		{
 			name:   "concat list",
@@ -54,9 +43,9 @@ func TestFFmpegArgs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ffmpegArgs("a=20250101_000000.000.ts", "a=20250101_000000.mp4", tc.bitrate, tc.concat)
+			got := ffmpegArgs("a=20250101_000000.000.ts", "a=20250101_000000.mp4", tc.concat)
 			if tc.concat {
-				got = ffmpegArgs("list.txt", "a=20250101_000000.mp4", tc.bitrate, tc.concat)
+				got = ffmpegArgs("list.txt", "a=20250101_000000.mp4", tc.concat)
 			}
 			if len(got) != len(tc.want) {
 				t.Fatalf("args = %q, want %q", got, tc.want)
@@ -82,7 +71,7 @@ func TestConvertRemuxesOneSegment(t *testing.T) {
 			}
 
 			stub, _ := ffmpegStub(t, "")
-			got, err := Convert(context.Background(), []string{in}, "", stub)
+			got, err := Convert(context.Background(), []string{in}, stub)
 			if err != nil {
 				t.Fatalf("Convert: %v", err)
 			}
@@ -113,7 +102,7 @@ func TestConvertConcatenatesSegments(t *testing.T) {
 	}
 
 	stub, calls := ffmpegStub(t, "")
-	got, err := Convert(context.Background(), []string{first, second}, "", stub)
+	got, err := Convert(context.Background(), []string{first, second}, stub)
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
@@ -148,7 +137,7 @@ func TestConvertReportsFFmpegOutput(t *testing.T) {
 	}
 
 	stub, _ := ffmpegStub(t, "echo 'Invalid data found' >&2\nexit 1")
-	got, err := Convert(context.Background(), []string{first, last}, "", stub)
+	got, err := Convert(context.Background(), []string{first, last}, stub)
 	if err == nil {
 		t.Fatal("want an error when ffmpeg exits non-zero")
 	}
@@ -224,7 +213,7 @@ func TestConvertKeepsTheOutputPathWhenCleanupFails(t *testing.T) {
 
 	// The same segment twice: the first remove succeeds, the second cannot.
 	stub, _ := ffmpegStub(t, "")
-	got, err := Convert(context.Background(), []string{segment, segment}, "", stub)
+	got, err := Convert(context.Background(), []string{segment, segment}, stub)
 	if err == nil {
 		t.Fatal("want an error when a segment cannot be removed")
 	}

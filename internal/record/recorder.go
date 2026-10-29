@@ -34,7 +34,6 @@ type API interface {
 type Options struct {
 	OutputDir  string
 	Duration   int // seconds, 0 means no cap
-	Bitrate    string
 	FFmpegPath string
 }
 
@@ -143,7 +142,7 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 	// is the normal way a recording ends, so ffmpeg gets its own budget.
 	convertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), convertTimeout)
 	defer cancel()
-	converted, err := Convert(convertCtx, sess.segments, r.opts.Bitrate, r.opts.FFmpegPath)
+	converted, err := Convert(convertCtx, sess.segments, r.opts.FFmpegPath)
 	if err != nil {
 		logx.Errorf("conversion failed, keeping the raw capture: %v", err)
 	}

@@ -7,7 +7,6 @@ import "errors"
 var (
 	ErrCountryBlocked = errors.New("captcha required or country blocked - use a VPN, pass -room_id, or add cookies.json")
 	ErrCountryAuto    = errors.New("automatic mode only works from a country TikTok does not block - use a VPN or add cookies.json")
-	ErrCountryFollow  = errors.New("followers mode only works from a country TikTok does not block - use a VPN or add cookies.json")
 	ErrPrivateRoom    = errors.New("live is private, login required - add your cookies to cookies.json")
 	ErrPrivateFollow  = errors.New("this account is private, follow the creator to access their LIVE")
 	ErrNotLive        = errors.New("the user is not hosting a live stream at the moment")
@@ -42,7 +41,7 @@ func Transient(err error) bool { return err != nil && transient(err) }
 func fatal(err error) bool {
 	for _, target := range []error{
 		ErrPrivateRoom, ErrPrivateAccount, ErrPrivateFollow,
-		ErrCountryBlocked, ErrCountryAuto, ErrCountryFollow,
+		ErrCountryBlocked, ErrCountryAuto,
 		ErrInvalidURL, ErrRoomID,
 	} {
 		if errors.Is(err, target) {

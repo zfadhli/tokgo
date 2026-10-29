@@ -34,8 +34,9 @@ func New(opts Options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tokgo",
 		Short: "Record TikTok live streams to mp4",
-		Long: "Records TikTok live streams to mp4 in the manual, automatic or\n" +
-			"followers mode of tiktok-live-recorder, plus an interactive tui.",
+		Long: "Waits for the account to go live, records it, then keeps watching.\n" +
+			"-now records a single attempt at once instead. tokgo tui is an\n" +
+			"interactive form for the same run.",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,

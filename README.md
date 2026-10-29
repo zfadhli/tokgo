@@ -2,11 +2,12 @@
 
 Records TikTok live streams to mp4. A clean-room Go implementation of the CLI
 surface of an earlier Python implementation:
-same flags, same three modes, no Python runtime, plus an interactive `tokgo tui`
-front end.
+the reference flags, no Python runtime, plus an interactive `tokgo tui` front
+end. It waits for an account to go live and keeps watching; `-now` records a
+single immediate attempt instead.
 
 ```
-tokgo -user somecreator -mode automatic -output ./captures
+tokgo -u somecreator -o ./captures
 ```
 
 ## Requirements
@@ -23,13 +24,12 @@ go build -o tokgo .
 | Flag | Description |
 |------|-------------|
 | `-url <URL>` | TikTok live URL (`https://www.tiktok.com/@name/live`, `https://vm.tiktok.com/...`) |
-| `-user <NAMES>` | Username(s), comma separated, `@` optional |
+| `-user <NAMES>`, `-u` | Username(s), comma separated, `@` optional |
 | `-room_id <ID>` | Numeric room id, bypasses username resolution |
-| `-mode <MODE>` | `manual` (default), `automatic`, `followers` |
+| `-now` | Record once right now instead of waiting for the account to go live |
 | `-automatic_interval <MIN>` | Minutes between liveness polls (default 5, minimum 1) |
 | `-duration <SECONDS>` | Stop after this many seconds per session |
-| `-output <DIR>` | Output directory |
-| `-bitrate <RATE>` | Re-encode video at this bitrate (`1000k`, `1M`) instead of stream copy |
+| `-output <DIR>`, `-o` | Output directory |
 | `-proxy <URL>` | HTTP proxy for lookups; the video transfer always goes direct |
 | `-telegram` | Upload the finished file to Telegram |
 | `-ffmpeg-path <PATH>` | Custom ffmpeg binary |
@@ -38,8 +38,8 @@ go build -o tokgo .
 The single-dash names match the reference CLI; the usual `--user` form works
 too, and `tokgo help` (or `-h`) prints the same list.
 
-Passing one of `-user`, `-room_id`, `-url` is required for `manual` and
-`automatic`; passing more than one is an error.
+Passing one of `-user`, `-room_id`, `-url` is required; passing more than one is
+an error.
 
 ## TUI
 
@@ -47,9 +47,9 @@ Passing one of `-user`, `-room_id`, `-url` is required for `manual` and
 tokgo tui
 ```
 
-An interactive form for the same run, built on Bubble Tea: mode chips, a single
-target field that accepts a username, a live URL or a numeric room id, plus
-duration, output directory, proxy and the Telegram toggle. The form is turned
+An interactive form for the same run, built on Bubble Tea: a wait/record-now
+chip, a single target field that accepts a username, a live URL or a numeric
+room id, plus duration, output directory, proxy and the Telegram toggle. The form is turned
 into argv and validated by the same `cli.Parse` the flags use, so it cannot
 accept a combination the CLI would reject or miss one it allows.
 
@@ -61,18 +61,16 @@ into the view; the debug log file is written as usual.
 
 ## Modes
 
-**manual** resolves the room once, checks that it is live, records until the
-stream ends, the room goes offline, `-duration` is reached, or you press Ctrl-C.
+By default the run polls the user every `-automatic_interval` minutes and
+records each session it catches, forever. Each recording lasts until the stream
+ends, the room goes offline, `-duration` is reached, or you press Ctrl-C.
 
-**automatic** polls the user every `-automatic_interval` minutes and records
-each session it catches, forever.
+**-now** resolves the room once, checks that it is live, records that one
+session and exits. It is the mode to use when you already know the stream is
+up.
 
-**followers** lists the accounts you follow and records every one of them that
-is live, each in its own goroutine. It needs a logged-in session, so
-`cookies.json` must contain `sessionid_ss`; without it the run stops
-immediately instead of polling a stranger's follower list (TikTok's anonymous
-pages embed a random `secUid`). A follower is not started twice while its
-recording is running.
+Passing several comma-separated usernames records them concurrently, in
+whichever mode is selected.
 
 Ctrl-C once stops the capture, finalises the segments and runs the mp4 remux.
 Ctrl-C twice aborts immediately, leaving the `.ts` segments captured so far.
@@ -87,8 +85,7 @@ straight to a raw `.flv` segment instead.
 
 At the end, or on Ctrl-C, the segments are remuxed in order with
 `ffmpeg -c copy` (stream copy, no quality loss) into
-`aljazeeraenglish=20261028_172928.mp4`, and the segments are removed. With
-`-bitrate` the video is re-encoded with libx264 while audio is copied.
+`aljazeeraenglish=20261028_172928.mp4`, and the segments are removed.
 
 If the remux fails the segments are kept, so no captured byte is lost, and a
 hard kill leaves the current `.ts` segment playable.
@@ -205,7 +202,7 @@ Deliberate, and each one is a decision rather than an omission:
   overwrites its own source tree. A compiled binary has nothing to overwrite, so
   the check only reports the latest tag, and only when `updateRepo` is set at
   build time.
-- **Multi-user and followers recordings are goroutines** sharing one process
+- **Multi-user recordings are goroutines** sharing one process
   rather than forked processes, so one Ctrl-C reaches all of them.
 - **`signed_url` is honoured.** The live tikrec response returns a `signed_url`
   (absolute); the Python code looks for `signed_path` and would build a broken
@@ -241,11 +238,10 @@ Recorded on 2026-10-29 against `@aljazeeraenglish` and `@tiktok`:
   2.0 MB for 8.18 s.
 - 60 s cap with `-race`: exit 0, no data race, 62.19 s container (the CDN pushes
   roughly 2 s of buffered media on connect), 1.93 Mbps, 15 MB.
-- `-bitrate 800k`: re-encoded to 15.08 s / 1.01 Mbps, video and audio present.
 - `-url`, `-room_id`: both resolve to the same room and record.
 - Ctrl-C once: capture finalised, segments remuxed into the `.mp4`, segments
   removed.
-- `-mode automatic`: records, then reports the wait before the next poll.
+- Default mode: records, then reports the wait before the next poll.
 - Multi-user: both users run concurrently, one live one not; the live one lands,
   the dead one is reported once with its `@name` prefix, exit status 1.
 - TLS impersonation: JA4 `t13d1516h1_8daaf6152771_02713d6af862` reported by

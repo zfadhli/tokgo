@@ -48,8 +48,8 @@ func TestHelpListsEveryFlag(t *testing.T) {
 
 	help := out.String()
 	for _, name := range []string{
-		"url", "user", "room_id", "mode", "automatic_interval", "proxy",
-		"output", "duration", "telegram", "bitrate", "ffmpeg-path", "no-update-check",
+		"url", "user", "room_id", "now", "automatic_interval", "proxy",
+		"output", "duration", "telegram", "ffmpeg-path", "no-update-check",
 	} {
 		if !strings.Contains(help, "--"+name) {
 			t.Errorf("help missing --%s:\n%s", name, help)
@@ -104,10 +104,10 @@ func TestExecuteStatus(t *testing.T) {
 			wantErr: "Error: unknown flag: --bogus",
 		},
 		{
-			name:    "invalid mode",
+			name:    "mode flag is gone",
 			args:    []string{"-mode", "bogus", "-user", "x"},
 			want:    2,
-			wantErr: "missing or invalid -mode",
+			wantErr: "unknown flag: --mode",
 		},
 		{
 			name:    "no target",
