@@ -63,17 +63,27 @@ func (r *Runner) Run(ctx context.Context, users []string) error {
 	if len(users) > 0 {
 		user = users[0]
 	}
+	var err error
 	if r.cfg.Mode == config.Automatic {
-		return r.automatic(ctx, user)
+		err = r.automatic(ctx, user)
+	} else {
+		err = r.manual(ctx, user)
 	}
-	return r.manual(ctx, user)
+	if err != nil && user != "" {
+		return fmt.Errorf("@%s: %w", user, err)
+	}
+	return err
 }
+
+// ErrReported marks failures that were already logged per user, so main can
+// exit non-zero without printing the same message twice.
+var ErrReported = errors.New("one or more recordings failed")
 
 func (r *Runner) parallel(ctx context.Context, users []string) error {
 	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		errs []error
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		fails int
 	)
 	for _, user := range users {
 		wg.Add(1)
@@ -86,17 +96,18 @@ func (r *Runner) parallel(ctx context.Context, users []string) error {
 				err = r.manual(ctx, user)
 			}
 			if err != nil && ctx.Err() == nil {
+				logx.Errorf("@%s: %v", user, err)
 				mu.Lock()
-				errs = append(errs, fmt.Errorf("@%s: %w", user, err))
+				fails++
 				mu.Unlock()
 			}
 		}(user)
 	}
 	wg.Wait()
-	for _, err := range errs {
-		logx.Errorf("%v", err)
+	if fails > 0 {
+		return ErrReported
 	}
-	return errors.Join(errs...)
+	return nil
 }
 
 // resolve fills in whichever of user/roomID the caller did not supply, in the
@@ -162,7 +173,7 @@ func (r *Runner) manual(ctx context.Context, user string) error {
 		err = tiktok.ErrNotLive
 	}
 	if err != nil {
-		return fmt.Errorf("@%s: %w", user, err)
+		return err
 	}
 
 	return r.capture(ctx, user, roomID)
@@ -234,6 +245,9 @@ func (r *Runner) automatic(ctx context.Context, user string) error {
 }
 
 func (r *Runner) followers(ctx context.Context) error {
+	if !hasSessionCookie(r.cfg.Cookies) {
+		return errors.New("followers mode needs a logged-in session: add sessionid_ss to cookies.json")
+	}
 	secUID, err := r.lookup.SecUID(ctx)
 	if err != nil {
 		return err
@@ -332,6 +346,18 @@ func (g *registry) finish(follower string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(g.in, strings.ToLower(follower))
+}
+
+// hasSessionCookie reports whether the cookie set can act as a logged-in
+// session. TikTok's anonymous pages embed a random secUid, so without this
+// check followers mode would poll a stranger's follower list forever.
+func hasSessionCookie(cookies map[string]string) bool {
+	for _, name := range []string{"sessionid", "sessionid_ss"} {
+		if cookies[name] != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {

@@ -95,9 +95,16 @@ func (c *Client) LiveURLs(ctx context.Context, roomID, user string) ([]string, e
 // RoomIDForUser resolves a username to a room id, preferring the tikrec signed
 // lookup and falling back to euler when that service is down.
 func (c *Client) RoomIDForUser(ctx context.Context, user string) (string, error) {
-	signed := c.signedRoomURL(ctx, user)
+	signed, signErr := c.signedRoomURL(ctx, user)
 	if signed == "" {
-		return c.eulerRoomID(ctx, user)
+		id, err := c.eulerRoomID(ctx, user)
+		if err != nil {
+			if signErr != nil {
+				return "", fmt.Errorf("%w (sign service unavailable: %v)", ErrRoomID, signErr)
+			}
+			return "", err
+		}
+		return id, nil
 	}
 
 	resp, err := c.get(ctx, signed, false)
@@ -339,33 +346,33 @@ func (c *Client) scrapeLiveURL(ctx context.Context, user string) string {
 	return strings.TrimRight(html.UnescapeString(picked), `\`)
 }
 
-func (c *Client) signedRoomURL(ctx context.Context, user string) string {
+func (c *Client) signedRoomURL(ctx context.Context, user string) (string, error) {
 	resp, err := c.get(ctx, c.tikrec+"/tiktok/room/api/sign?unique_id="+url.QueryEscape(user), false)
 	if err != nil {
-		logx.Warnf("tikrec sign request failed: %v", err)
-		return ""
+		return "", err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		logx.Warnf("tikrec sign response unreadable: %v", err)
-		return ""
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	var signed struct {
 		SignedURL  string `json:"signed_url"`
 		SignedPath string `json:"signed_path"`
 	}
 	if err := json.Unmarshal(body, &signed); err != nil {
-		logx.Warnf("tikrec sign response unparsable: %v", err)
-		return ""
+		return "", fmt.Errorf("unparsable sign response: %w", err)
 	}
 	if signed.SignedURL != "" {
-		return signed.SignedURL
+		return signed.SignedURL, nil
 	}
 	if signed.SignedPath != "" {
-		return c.base + signed.SignedPath
+		return c.base + signed.SignedPath, nil
 	}
-	return ""
+	return "", errors.New("no signed url in the response")
 }
 
 func (c *Client) eulerRoomID(ctx context.Context, user string) (string, error) {

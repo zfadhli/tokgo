@@ -12,8 +12,8 @@ func TestCandidatesQualityOrder(t *testing.T) {
 				{SDKKey: "sd", Level: 2},
 			}},
 		}},
-		FLVPullURL: map[string]string{"FULL_HD1": "flv-full", "SD1": "flv-sd1"},
-		HLSPullURL: "hls-legacy",
+		FLVPullURL:  map[string]string{"FULL_HD1": "flv-full", "SD1": "flv-sd1"},
+		HLSPullURL:  "hls-legacy",
 		RTMPPullURL: "rtmp-legacy",
 	}}}
 

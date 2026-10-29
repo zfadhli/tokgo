@@ -45,9 +45,12 @@ stream ends, the room goes offline, `-duration` is reached, or you press Ctrl-C.
 **automatic** polls the user every `-automatic_interval` minutes and records
 each session it catches, forever.
 
-**followers** lists the accounts you follow (needs `cookies.json` for a logged-in
-session), and records every one of them that is live, each in its own
-goroutine. A follower is not started twice while its recording is running.
+**followers** lists the accounts you follow and records every one of them that
+is live, each in its own goroutine. It needs a logged-in session, so
+`cookies.json` must contain `sessionid_ss`; without it the run stops
+immediately instead of polling a stranger's follower list (TikTok's anonymous
+pages embed a random `secUid`). A follower is not started twice while its
+recording is running.
 
 Ctrl-C once stops the capture, finalises the file and runs the mp4 remux.
 Ctrl-C twice aborts immediately, leaving a partial `_flv.mp4`.
@@ -131,9 +134,27 @@ Deliberate, and each one is a decision rather than an omission:
 ## Tests
 
 ```bash
-go test ./...
+ go test ./...
+ go test -race ./...
 ```
 
 Unit tests cover the quality ordering, the CLI validation matrix, the recorder
 fallback and stop logic (with a fake network), ffmpeg argument construction, and
 the Telegram multipart request. No test touches the network.
+
+## Verified against the live service
+
+Recorded on 2026-10-29 against `@aljazeeraenglish` and `@tiktok`:
+
+- `-user` → tikrec sign → room id → liveness → capture: `TK_aljazeeraenglish_*.mp4`,
+  ffprobe `h264 1280x720 25fps + aac`, 2.0 MB for 8.18 s.
+- 60 s cap with `-race`: exit 0, no data race, 62.19 s container (the CDN pushes
+  roughly 2 s of buffered media on connect), 1.93 Mbps, 15 MB.
+- `-bitrate 800k`: re-encoded to 15.08 s / 1.01 Mbps, video and audio present.
+- `-url`, `-room_id`: both resolve to the same room and record.
+- Ctrl-C once: capture finalised and remuxed to `.mp4`, `_flv.mp4` removed.
+- `-mode automatic`: records, then reports the wait before the next poll.
+- Multi-user: both users run concurrently, one live one not; the live one lands,
+  the dead one is reported once with its `@name` prefix, exit status 1.
+- Error paths: not-live, invalid URL, mutually exclusive flags, and TikTok's WAF
+  answer (`403` with an empty body) all report a single clear message.

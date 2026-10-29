@@ -18,6 +18,7 @@ const (
 	minStreamBytes  = 4096
 	maxZeroAttempts = 5
 	retryDelay      = 2 * time.Second
+	convertTimeout  = 30 * time.Minute
 )
 
 // API is the slice of the TikTok client a recording needs. Declared here, on
@@ -103,7 +104,11 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 	}
 	logx.Infof("recording finished: %s", path)
 
-	converted, err := Convert(ctx, out, r.opts.Bitrate, r.opts.FFmpegPath)
+	// The remux must survive the cancellation that stopped the capture: Ctrl-C
+	// is the normal way a recording ends, so ffmpeg gets its own budget.
+	convertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), convertTimeout)
+	defer cancel()
+	converted, err := Convert(convertCtx, out, r.opts.Bitrate, r.opts.FFmpegPath)
 	if err != nil {
 		logx.Errorf("conversion failed, keeping the raw capture: %v", err)
 		return out, nil

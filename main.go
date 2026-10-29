@@ -74,6 +74,9 @@ func main() {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
+		if errors.Is(err, app.ErrReported) {
+			os.Exit(1)
+		}
 		logx.Errorf("%v", err)
 		os.Exit(1)
 	}
