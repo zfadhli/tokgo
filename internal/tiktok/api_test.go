@@ -2,6 +2,7 @@ package tiktok
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -110,6 +111,8 @@ func TestLiveURLsRestrictedScrape(t *testing.T) {
 		switch r.URL.Path {
 		case "/webcast/room/info/":
 			writeBody(w, infoRestricted)
+		case "/tiktok/room/api/sign":
+			w.WriteHeader(http.StatusServiceUnavailable)
 		case "/@creator/live":
 			writeBody(w, page)
 		default:
@@ -138,11 +141,16 @@ func TestLiveURLsRestrictedScrapeFallbacks(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/webcast/room/info/" {
+				switch r.URL.Path {
+				case "/webcast/room/info/":
 					writeBody(w, infoRestricted)
-					return
+				case "/tiktok/room/api/sign":
+					writeBody(w, `{"signed_url":"http://`+r.Host+`/signed"}`)
+				case "/signed":
+					writeBody(w, `{"data":{"liveRoom":null}}`)
+				default:
+					writeBody(w, tc.page)
 				}
-				writeBody(w, tc.page)
 			}))
 			if _, err := c.LiveURLs(t.Context(), "7123", tc.user); !errors.Is(err, ErrPrivateRoom) {
 				t.Fatalf("err = %v, want ErrPrivateRoom", err)
@@ -153,11 +161,14 @@ func TestLiveURLsRestrictedScrapeFallbacks(t *testing.T) {
 
 func TestLiveURLsRestrictedScrapeHLS(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/webcast/room/info/" {
+		switch r.URL.Path {
+		case "/webcast/room/info/":
 			writeBody(w, infoRestricted)
-			return
+		case "/tiktok/room/api/sign":
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			writeBody(w, `<script>src="https://cdn.example/live.m3u8?sign=1"</script>`)
 		}
-		writeBody(w, `<script>src="https://cdn.example/live.m3u8?sign=1"</script>`)
 	}))
 	got, err := c.LiveURLs(t.Context(), "7123", "creator")
 	if err != nil {
@@ -555,23 +566,29 @@ func TestContextCancellationIsHonoured(t *testing.T) {
 }
 
 // TestRestrictedLiveIsCapturable walks the exact chain the recorder takes for a
-// login-restricted room: TikTok answers 4003110 for the room API, the live page
-// still leaks a CDN url, and that url serves media. A restricted live is only
-// usable if all three steps line up, so assert them together.
+// login-restricted room: TikTok answers 4003110 for the webcast room API, the
+// signed web UI endpoint still carries the stream manifest, and that url serves
+// media. A restricted live is only usable if all three steps line up, so assert
+// them together.
 func TestRestrictedLiveIsCapturable(t *testing.T) {
 	stream := strings.Repeat("flv-frame-", 2048)
+	// JSON carries no HTML escaping; only the scraped page needs unescaping.
+	manifest := `{"data":{"origin":{"main":{"flv":"CDN/live.flv?sig=abc&t=1"}},"sd":{"main":{"flv":"CDN/live_sd.flv"}}}}`
+
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/webcast/room/check_alive/":
 			writeBody(w, `{"data":[{"alive":true}]}`)
 		case "/webcast/room/info/":
 			writeBody(w, infoRestricted)
-		case "/@creator/live":
-			// Point the scraped url back at this server: a restricted room's page
-			// advertises an absolute CDN host, and the test must stay offline.
-			cdn := "http://" + r.Host + "/live_or4.flv?sig=abc&amp;t=1"
-			writeBody(w, `<script>var p="`+cdn+`";</script>`)
-		case "/live_or4.flv":
+		case "/tiktok/room/api/sign":
+			writeBody(w, `{"signed_url":"http://`+r.Host+`/signed?unique_id=creator"}`)
+		case "/signed":
+			qualities := `[{"sdk_key":"origin","level":10},{"sdk_key":"sd","level":2}]`
+			escaped := strings.ReplaceAll(manifest, "CDN", "http://"+r.Host)
+			writeBody(w, `{"data":{"liveRoom":{"status":2,"streamData":{"pull_data":{"stream_data":`+
+				quoteJSON(t, escaped)+`,"options":{"qualities":`+qualities+`}}}}}}`)
+		case "/live.flv":
 			writeBody(w, stream)
 		default:
 			t.Errorf("unexpected request %s", r.URL.Path)
@@ -591,8 +608,8 @@ func TestRestrictedLiveIsCapturable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LiveURLs: %v", err)
 	}
-	if len(urls) != 1 || !strings.HasSuffix(urls[0], "/live_or4.flv?sig=abc&t=1") {
-		t.Fatalf("scraped urls = %v", urls)
+	if len(urls) != 2 || !strings.HasSuffix(urls[0], "/live.flv?sig=abc&t=1") || !strings.HasSuffix(urls[1], "/live_sd.flv") {
+		t.Fatalf("candidates = %v, want the origin url first", urls)
 	}
 
 	body, err := c.OpenStream(ctx, urls[0])
@@ -607,4 +624,44 @@ func TestRestrictedLiveIsCapturable(t *testing.T) {
 	if string(got) != stream {
 		t.Fatalf("captured %d bytes, want %d", len(got), len(stream))
 	}
+}
+
+// TestRestrictedLiveFallsBackToPageScrape covers the second fallback: the signed
+// endpoint has no live room, so the public page is the only remaining source.
+func TestRestrictedLiveFallsBackToPageScrape(t *testing.T) {
+	stream := strings.Repeat("flv-frame-", 2048)
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/webcast/room/info/":
+			writeBody(w, infoRestricted)
+		case "/tiktok/room/api/sign":
+			writeBody(w, `{"signed_url":"http://`+r.Host+`/signed"}`)
+		case "/signed":
+			writeBody(w, `{"data":{"liveRoom":null}}`)
+		case "/@creator/live":
+			cdn := "http://" + r.Host + "/live_or4.flv?sig=abc&amp;t=1"
+			writeBody(w, `<script>var p="`+cdn+`";</script>`)
+		case "/live_or4.flv":
+			writeBody(w, stream)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+	}))
+
+	urls, err := c.LiveURLs(t.Context(), "7123", "creator")
+	if err != nil {
+		t.Fatalf("LiveURLs: %v", err)
+	}
+	if len(urls) != 1 || !strings.HasSuffix(urls[0], "/live_or4.flv?sig=abc&t=1") {
+		t.Fatalf("scraped urls = %v", urls)
+	}
+}
+
+func quoteJSON(t *testing.T, raw string) string {
+	t.Helper()
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	return string(encoded)
 }

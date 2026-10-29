@@ -76,12 +76,7 @@ func (c *Client) LiveURLs(ctx context.Context, roomID, user string) ([]string, e
 		return nil, ErrPrivateAccount
 	}
 	if info.restricted() {
-		if user != "" {
-			if streamURL := c.scrapeLiveURL(ctx, user); streamURL != "" {
-				return []string{streamURL}, nil
-			}
-		}
-		return nil, ErrPrivateRoom
+		return c.restrictedURLs(ctx, user)
 	}
 	if strings.Contains(info.Raw, followMarker) {
 		return nil, ErrPrivateFollow
@@ -418,4 +413,72 @@ func (c *Client) msToken() string {
 func decodeInto(resp *http.Response, v any) error {
 	defer resp.Body.Close()
 	return json.NewDecoder(resp.Body).Decode(v)
+}
+
+// restrictedURLs handles a room the webcast API refuses with 4003110. The web
+// UI endpoint reached through the signing service carries the same stream
+// manifest and is not subject to that refusal, so it is tried first. The public
+// live page is the second attempt: TikTok increasingly answers it with a
+// SlardarWAF stub, so it can no longer be relied on alone.
+func (c *Client) restrictedURLs(ctx context.Context, user string) ([]string, error) {
+	if user != "" {
+		if urls, err := c.signedLiveURLs(ctx, user); err == nil && len(urls) > 0 {
+			logx.Infof("room api refused the room, resolved %d stream urls from the signed web endpoint", len(urls))
+			return urls, nil
+		}
+		if streamURL := c.scrapeLiveURL(ctx, user); streamURL != "" {
+			logx.Infof("room api refused the room, resolved a stream url from the live page")
+			return []string{streamURL}, nil
+		}
+	}
+	return nil, ErrPrivateRoom
+}
+
+// signedLiveURLs reads the live room payload of the signed web UI endpoint and
+// reuses the same quality ordering as the webcast response.
+func (c *Client) signedLiveURLs(ctx context.Context, user string) ([]string, error) {
+	signed, err := c.signedRoomURL(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.get(ctx, signed, false)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("signed live room: %s", resp.Status)
+	}
+
+	var payload struct {
+		Data struct {
+			LiveRoom *struct {
+				Status     FlexString `json:"status"`
+				StreamData struct {
+					PullData struct {
+						StreamData string  `json:"stream_data"`
+						Options    Options `json:"options"`
+					} `json:"pull_data"`
+				} `json:"streamData"`
+			} `json:"liveRoom"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	if payload.Data.LiveRoom == nil {
+		return nil, ErrNotLive
+	}
+	info := &RoomInfo{Data: RoomData{
+		Status: payload.Data.LiveRoom.Status,
+		StreamURL: StreamURL{LiveCoreSDKData: LiveCoreSDKData{PullData: PullData{
+			StreamData: payload.Data.LiveRoom.StreamData.PullData.StreamData,
+			Options:    payload.Data.LiveRoom.StreamData.PullData.Options,
+		}}},
+	}}
+	return info.Candidates(), nil
 }

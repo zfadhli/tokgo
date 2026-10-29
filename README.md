@@ -104,8 +104,8 @@ Resolution order, per mode, against TikTok's own endpoints:
    in favour of the next candidate.
 
 When TikTok answers `status_code 4003110` (WAF or region restriction) the
-recorder scrapes the public live page HTML for a direct `.flv`/`.m3u8` URL
-before giving up.
+recorder falls back to the signed web UI endpoint, which carries the same stream
+manifest, and only then to scraping the public live page.
 
 ## TLS impersonation and proxies
 
@@ -198,13 +198,31 @@ Recorded on 2026-10-29 against `@aljazeeraenglish` and `@tiktok`:
 
 ### Restricted lives
 
-A `4003110` answer (login or region restriction) is handled by scraping the
-public live page for a CDN url. Verified two ways:
+A `4003110` answer means TikTok refuses the webcast room API for that room
+(login or region restriction). Two fallbacks are tried, in this order:
 
-- `TestRestrictedLiveIsCapturable` walks the whole chain: `RoomAlive` reports a
-  restricted room alive, `LiveURLs` scrapes `..._or4.flv` out of the page, and
-  `OpenStream` returns the media bytes. Deterministic, offline.
-- Against the live service, this IP is not WAF-flagged (both `crypto/tls` and
-  the Chrome hello get `200`), so a genuine `4003110` could not be provoked from
-  here; the WAF path that *was* hit earlier (`403` with an empty body) is
-  reported as `ErrWAF` rather than mistaken for a dead room.
+1. **The signed web UI endpoint.** `tikrec.com/tiktok/room/api/sign` signs a
+   `www.tiktok.com/api-live/user/room` request, which returns the same stream
+   manifest the webcast API would have (`data.liveRoom.streamData.pull_data`).
+   The recorder maps it onto the ordinary quality ordering, so a restricted room
+   gets the same best-first CDN list as any other.
+2. **The public live page**, scraping a `.flv`/`.m3u8` url out of the HTML.
+
+The second is now unreliable: TikTok answers `GET /@user/live` with a 1,485-byte
+SlardarWAF challenge stub that contains no stream urls, with or without a warmed
+cookie jar. The reference tool relies on that scrape alone, which means its
+restricted-LIVE support is effectively dead against the current site. Hence the
+signed endpoint became the primary fallback.
+
+Verified two ways:
+
+- `TestRestrictedLiveIsCapturable` walks the whole chain offline: `RoomAlive`
+  reports a restricted room alive, `LiveURLs` resolves the manifest through the
+  signed endpoint and orders origin before sd, and `OpenStream` returns the
+  media bytes. `TestRestrictedLiveFallsBackToPageScrape` covers the second path.
+- Against the real service, the signed fallback was checked directly:
+  `TestSignedEndpointYieldsPlayableStream` resolved 3 candidate urls for a live
+  user and the first one served an FLV container. This IP is not WAF-flagged, so
+  a genuine `4003110` could not be provoked from here; the WAF path that *was*
+  hit earlier (`403` with an empty body) reports `ErrWAF` rather than being
+  mistaken for a dead room.
