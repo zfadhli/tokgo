@@ -100,8 +100,8 @@ type Model struct {
 	targets      []target
 	byName       map[string]int
 	list         []saved   // saved targets, in the order they were added
-	pendingAuto  []string  // autostart names waiting for their stagger window
-	autoNext     time.Time // when the next autostart is due
+	pendingStart []string  // names waiting for their stagger window
+	nextStart    time.Time // when the next queued start is due
 	userPath     string    // where list persists; "" disables saving
 	settingsPath string    // where the input-line knobs persist; "" disables saving
 	restarting   []string  // targets to start again once their run is gone
@@ -226,7 +226,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.now = time.Time(msg)
-		return m, tea.Batch(tickCmd(), m.pumpAuto())
+		return m, tea.Batch(tickCmd(), m.pumpStart())
 
 	case runDoneMsg:
 		m.result = msg.err
@@ -328,7 +328,7 @@ func (m *Model) stopRun() {
 	}
 	m.finishing = true
 	m.restarting = nil
-	m.pendingAuto = nil
+	m.pendingStart = nil
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
@@ -390,7 +390,7 @@ func (m *Model) startUsers(names []string) tea.Cmd {
 	if len(names) == 0 {
 		return nil
 	}
-	m.forgetAuto(names...)
+	m.forgetStart(names...)
 	m.remember(names)
 	if m.ctrl != nil {
 		m.addToRun(names)
@@ -419,8 +419,8 @@ func (m *Model) loadSaved() {
 	m.settingsPath = settingsFile()
 	m.list = loadTargets(m.userPath)
 	m.settings = m.savedSettings()
-	m.pendingAuto = m.autoNames()
-	m.autoNext = m.now
+	m.pendingStart = m.autoNames()
+	m.nextStart = m.now
 	m.syncRows()
 }
 
@@ -574,7 +574,7 @@ func (m *Model) remove(raw string) {
 	m.list = slices.Delete(m.list, i, i+1)
 	m.writeList()
 	m.forgetRestart(user)
-	m.forgetAuto(user)
+	m.forgetStart(user)
 	// A target the run still holds keeps its row until the terminal status, so
 	// the stopped capture stays visible with its size.
 	if !(m.ctrl != nil && m.ctrl.DropUser(user)) {
@@ -636,17 +636,18 @@ func (m *Model) showConfig() {
 	}
 }
 
-// pumpAuto starts one queued autostart target per stagger window. The queue is
-// independent of a run's lifetime, so a /once run that ends hands the next name
-// its turn instead of dropping it.
-func (m *Model) pumpAuto() tea.Cmd {
-	if len(m.pendingAuto) == 0 || m.now.Before(m.autoNext) {
+// pumpStart starts one queued target per stagger window. The queue serves the
+// autostart group and /start all alike, and it is independent of a run's
+// lifetime, so a /once run that ends hands the next name its turn instead of
+// dropping it.
+func (m *Model) pumpStart() tea.Cmd {
+	if len(m.pendingStart) == 0 || m.now.Before(m.nextStart) {
 		return nil
 	}
-	user := m.pendingAuto[0]
-	m.pendingAuto = m.pendingAuto[1:]
-	m.autoNext = m.now.Add(autoStagger)
-	m.appendLog(logLine{level: "INFO", text: "autostart @" + user})
+	user := m.pendingStart[0]
+	m.pendingStart = m.pendingStart[1:]
+	m.nextStart = m.now.Add(autoStagger)
+	m.appendLog(logLine{level: "INFO", text: fmt.Sprintf("starting @%s · %d queued", user, len(m.pendingStart))})
 	return m.startUsers([]string{user})
 }
 
@@ -684,7 +685,7 @@ func (m *Model) setAutostart(raw string) {
 	}
 	m.writeList()
 	if !on {
-		m.forgetAuto(user)
+		m.forgetStart(user)
 		m.appendLog(logLine{level: "INFO", text: "autostart @" + user + " off"})
 		return
 	}
@@ -781,7 +782,7 @@ type command struct {
 var commands = []command{
 	{"add", "<name,...>", "save names to the list, and add them to a live run"},
 	{"autostart", "<name> [off]", "start this target when tokgo tui opens, off to stop that"},
-	{"start", "<name|all>", "start one saved target, or every saved target"},
+	{"start", "<name|all>", "start one saved target, or every saved target 10s apart"},
 	{"restart", "<name>", "stop one target, let it remux, then start it again"},
 	{"remove", "<name>", "take one target off the saved list"},
 	{"drop", "<name>", "stop one target, keep it in the list"},
@@ -919,7 +920,11 @@ func (m *Model) command(line string) tea.Cmd {
 			m.warn("no saved targets · /add <name>")
 			break
 		}
-		return m.startUsers(names)
+		// /start all has the last word on the queue, so the list order wins over
+		// whatever the boot stagger had left.
+		m.pendingStart = names
+		m.nextStart = m.now
+		return m.pumpStart()
 	case "restart":
 		return m.restart(rest)
 	case "remove":
@@ -1015,7 +1020,7 @@ func (m *Model) drop(raw string) {
 		return
 	}
 	m.forgetRestart(user)
-	m.forgetAuto(user)
+	m.forgetStart(user)
 	m.ctrl.DropUser(user)
 }
 
@@ -1125,12 +1130,12 @@ func (m *Model) forgetRestart(user string) {
 	}
 }
 
-// forgetAuto drops names from the boot queue, so a manual start or a drop is
-// the last word on whether they run.
-func (m *Model) forgetAuto(users ...string) {
+// forgetStart drops names from the stagger queue, so a manual start or a drop
+// is the last word on whether they run.
+func (m *Model) forgetStart(users ...string) {
 	for _, user := range users {
-		if i := slices.Index(m.pendingAuto, user); i >= 0 {
-			m.pendingAuto = slices.Delete(m.pendingAuto, i, i+1)
+		if i := slices.Index(m.pendingStart, user); i >= 0 {
+			m.pendingStart = slices.Delete(m.pendingStart, i, i+1)
 		}
 	}
 }
