@@ -237,6 +237,24 @@ func TestTerminalClockKeepsTheWholeRun(t *testing.T) {
 	}
 }
 
+// TestLongNamesWidenTheList proves the account name survives at 80 columns:
+// the list takes room from the log pane instead of clipping the identifier.
+func TestLongNamesWidenTheList(t *testing.T) {
+	m := newModel()
+	m.width, m.height = 80, 24
+	m.screen = screenMonitor
+	m.applyStatus(app.Status{User: "aljazeeraenglish", Phase: app.PhaseRecording, Bytes: 1 << 20})
+	v := m.View()
+	if !strings.Contains(v, "@aljazeeraenglish") {
+		t.Fatalf("the name was clipped at 80 columns:\n%s", v)
+	}
+	for _, line := range strings.Split(v, "\n") {
+		if got := lipgloss.Width(line); got > 80 {
+			t.Fatalf("line is %d wide:\n%s", got, v)
+		}
+	}
+}
+
 // TestTerminalStatusClearsTheCaptureDetail proves a finished target does not
 // keep showing the segment it was writing when it stopped: the detail line is
 // for why it is where it is now, and a stopped target has no reason left.
