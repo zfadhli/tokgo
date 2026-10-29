@@ -212,13 +212,26 @@ func stubCalls(t *testing.T, calls string) []string {
 	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
 }
 
-// copyStub writes an executable that receives ffmpeg's arguments and runs body.
-func copyStub(t *testing.T, body string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "ffmpeg")
-	script := "#!/bin/sh\nlast=\"\"\nfor a in \"$@\"; do last=\"$a\"; done\n" + body + "\n"
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+// A failed cleanup must not cost the recording: the mp4 is already good, so its
+// path comes back with the error.
+func TestConvertKeepsTheOutputPathWhenCleanupFails(t *testing.T) {
+	dir := t.TempDir()
+	segment := filepath.Join(dir, "TK_a_2025.01.01_00-00-00.000.ts")
+	if err := os.WriteFile(segment, []byte("captured"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return path
+
+	// The same segment twice: the first remove succeeds, the second cannot.
+	stub, _ := ffmpegStub(t, "")
+	got, err := Convert(context.Background(), []string{segment, segment}, "", stub)
+	if err == nil {
+		t.Fatal("want an error when a segment cannot be removed")
+	}
+	want := filepath.Join(dir, "TK_a_2025.01.01_00-00-00.mp4")
+	if got != want {
+		t.Fatalf("Convert returned %q, want the finished recording %q", got, want)
+	}
+	if data, err := os.ReadFile(want); err != nil || string(data) != "capturedcaptured" {
+		t.Fatalf("output file = %q, %v", data, err)
+	}
 }

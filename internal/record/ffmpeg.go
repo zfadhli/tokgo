@@ -50,7 +50,7 @@ func Convert(ctx context.Context, segments []string, bitrate, ffmpegPath string)
 	}
 	for _, seg := range segments {
 		if err := os.Remove(seg); err != nil {
-			return "", err
+			return out, err
 		}
 	}
 	return out, nil
