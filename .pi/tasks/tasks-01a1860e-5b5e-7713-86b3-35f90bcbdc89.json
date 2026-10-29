@@ -65,13 +65,13 @@
       "id": "6",
       "subject": "Verify: build, vet, unit tests, live end-to-end capture",
       "description": "go build ./... , go vet ./... , go test ./... , then live run against a real live room: resolve room, record N seconds, confirm mp4 exists, ffprobe reports video+audio, nonzero duration.",
-      "status": "pending",
+      "status": "completed",
       "activeForm": "Verifying end-to-end",
       "metadata": {},
       "blocks": [],
       "blockedBy": [],
       "createdAt": 1793250625681,
-      "updatedAt": 1793250625681
+      "updatedAt": 1793252186701
     }
   ]
 }
