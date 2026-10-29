@@ -630,3 +630,70 @@ func TestCopyStreamReconnectsAfterReadErrors(t *testing.T) {
 		t.Fatalf("sink holds %d bytes, want %d", len(sink.bytes()), len(payload))
 	}
 }
+
+// The UI needs byte progress while a capture runs and a stage change before the
+// remux, so Record reports both through Options.Report.
+func TestRecordReportsCaptureProgress(t *testing.T) {
+	payload := bytes.Repeat(streamBytes(), 300) // 2.3 MiB, enough to cross the 1 MiB throttle
+	api := &fakeAPI{
+		urls:  []string{"url-a"},
+		alive: runsOnce,
+		open: func(context.Context, string) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(payload)), nil
+		},
+	}
+	stub, _ := ffmpegStub(t, "")
+	dir := t.TempDir()
+
+	var (
+		mu       sync.Mutex
+		progress []Progress
+	)
+	rec := New(api, Options{OutputDir: dir, FFmpegPath: stub, Report: func(p Progress) {
+		mu.Lock()
+		progress = append(progress, p)
+		mu.Unlock()
+	}})
+
+	if _, err := collect(t, rec, context.Background()); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	mu.Lock()
+	got := append([]Progress(nil), progress...)
+	mu.Unlock()
+	if len(got) < 3 {
+		t.Fatalf("reported %d updates, want a start, the throttled writes and the remux: %+v", len(got), got)
+	}
+	if first := got[0]; first.Stage != StageCapturing || first.Bytes != 0 || first.User != "user" || !strings.HasSuffix(first.Segment, ".000.ts") {
+		t.Fatalf("first update = %+v, want a zero-byte capture start on the first segment", first)
+	}
+
+	lastCapture := int64(-1)
+	converting := Progress{Stage: -1}
+	for _, p := range got {
+		if p.Stage == StageConverting {
+			if converting.Stage != -1 {
+				t.Fatalf("reported the remux twice: %+v", got)
+			}
+			converting = p
+			continue
+		}
+		if converting.Stage != -1 {
+			t.Fatalf("capture update after the remux started: %+v", p)
+		}
+		if p.Bytes <= lastCapture {
+			t.Fatalf("bytes stopped growing: %+v", got)
+		}
+		lastCapture = p.Bytes
+	}
+	if converting.Stage == -1 {
+		t.Fatalf("no converting update in %+v", got)
+	}
+	if converting.Segment != "" {
+		t.Fatalf("converting update names segment %q, want none", converting.Segment)
+	}
+	if lastCapture != int64(len(payload)) {
+		t.Fatalf("last capture bytes = %d, want the %d written", lastCapture, len(payload))
+	}
+}

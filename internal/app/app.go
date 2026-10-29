@@ -5,7 +5,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -29,6 +28,16 @@ type Runner struct {
 	stream  *tiktok.Client // always direct, for bulk transfer
 	rec     *record.Recorder
 	uploads telegram.Config
+
+	mu     sync.Mutex
+	idle   *sync.Cond // Broadcast when the task map shrinks to empty
+	runCtx context.Context
+	tasks  map[string]context.CancelFunc
+	errs   map[string]error // per-target result, for the single-target return path
+	multi  bool             // more than one target in this run
+	fails  int
+	status func(Status)
+	work   func(context.Context, string) (string, error) // the body the current run's targets execute
 }
 
 // New wires a runner. The proxy, when set, is used for lookups only: pulling
@@ -36,39 +45,29 @@ type Runner struct {
 func New(cfg config.Config, uploads telegram.Config) *Runner {
 	lookup := tiktok.New(cfg.Proxy, cfg.Cookies)
 	stream := lookup.Browser()
-	return &Runner{
-		cfg:    cfg,
-		lookup: lookup,
-		stream: stream,
-		rec: record.New(stream, record.Options{
-			OutputDir:  cfg.OutputDir,
-			Duration:   cfg.Duration * 60,
-			FFmpegPath: cfg.FFmpegPath,
-		}),
+	r := &Runner{
+		cfg:     cfg,
+		lookup:  lookup,
+		stream:  stream,
 		uploads: uploads,
 	}
+	r.rec = record.New(stream, record.Options{
+		OutputDir:  cfg.OutputDir,
+		Duration:   cfg.Duration * 60,
+		FFmpegPath: cfg.FFmpegPath,
+		Report:     r.report,
+	})
+	return r
 }
 
 // Run executes the configured mode for the given users (one user unless the CLI
 // was given a comma-separated list) and blocks until done or cancelled.
 func (r *Runner) Run(ctx context.Context, users []string) error {
-	if len(users) > 1 {
-		return r.parallel(ctx, users)
-	}
-	user := ""
-	if len(users) > 0 {
-		user = users[0]
-	}
-	if err := r.loop()(ctx, user); err != nil && user != "" {
-		return fmt.Errorf("@%s: %w", user, err)
-	} else if err != nil {
-		return err
-	}
-	return nil
+	return r.supervise(ctx, users, r.loop())
 }
 
 // loop picks the wait-for-live poll or the single immediate attempt.
-func (r *Runner) loop() func(context.Context, string) error {
+func (r *Runner) loop() func(context.Context, string) (string, error) {
 	if r.cfg.Once {
 		return r.once
 	}
@@ -78,31 +77,6 @@ func (r *Runner) loop() func(context.Context, string) error {
 // ErrReported marks failures that were already logged per user, so main can
 // exit non-zero without printing the same message twice.
 var ErrReported = errors.New("one or more recordings failed")
-
-func (r *Runner) parallel(ctx context.Context, users []string) error {
-	var (
-		wg    sync.WaitGroup
-		mu    sync.Mutex
-		fails int
-	)
-	for _, user := range users {
-		wg.Add(1)
-		go func(user string) {
-			defer wg.Done()
-			if err := r.loop()(ctx, user); err != nil && ctx.Err() == nil {
-				logx.Errorf("@%s: %v", user, err)
-				mu.Lock()
-				fails++
-				mu.Unlock()
-			}
-		}(user)
-	}
-	wg.Wait()
-	if fails > 0 {
-		return ErrReported
-	}
-	return nil
-}
 
 // resolve fills in whichever of user/roomID the caller did not supply, in the
 // reference's order: url first, then door-from-user, then room-from-user.
@@ -146,13 +120,14 @@ func (r *Runner) countryGuard(ctx context.Context) error {
 	return tiktok.ErrCountryAuto
 }
 
-func (r *Runner) once(ctx context.Context, user string) error {
-	user, roomID, err := r.resolve(ctx, user, r.cfg.RoomID)
+func (r *Runner) once(ctx context.Context, target string) (string, error) {
+	r.emit(Status{User: target, Phase: PhaseResolving})
+	user, roomID, err := r.resolve(ctx, target, r.cfg.RoomID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := r.countryGuard(ctx); err != nil {
-		return err
+		return "", err
 	}
 
 	status, err := r.lookup.RoomStatus(ctx, roomID)
@@ -160,12 +135,13 @@ func (r *Runner) once(ctx context.Context, user string) error {
 		err = tiktok.ErrNotLive
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 
+	r.emit(Status{User: target, Phase: PhaseLive, Detail: roomID, RoomID: roomID})
 	logLive(user, roomID, status)
 
-	return r.capture(ctx, user, roomID)
+	return r.capture(ctx, target, user, roomID)
 }
 
 // logLive announces the room, its uptime when TikTok's timestamp is recent, and
@@ -181,39 +157,52 @@ func logLive(user, roomID string, status tiktok.RoomStatus) {
 	}
 }
 
-// capture records one session and hands it to Telegram when enabled.
-func (r *Runner) capture(ctx context.Context, user, roomID string) error {
+// capture records one session and hands it to Telegram when enabled. target is
+// the name the run registered, user is what resolution found.
+func (r *Runner) capture(ctx context.Context, target, user, roomID string) (string, error) {
+	r.emit(Status{User: target, Phase: PhaseRecording, RoomID: roomID})
 	path, err := r.rec.Record(ctx, user, roomID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !r.cfg.UploadTelegram {
-		return nil
+		return path, nil
 	}
 	if err := telegram.Upload(ctx, r.uploads, path); err != nil {
 		logx.Errorf("telegram upload of %s failed: %v", path, err)
 	}
-	return nil
+	return path, nil
 }
 
-func (r *Runner) automatic(ctx context.Context, user string) error {
-	user, _, err := r.resolve(ctx, user, r.cfg.RoomID)
+func (r *Runner) automatic(ctx context.Context, target string) (string, error) {
+	r.emit(Status{User: target, Phase: PhaseResolving})
+	user, _, err := r.resolve(ctx, target, r.cfg.RoomID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := r.countryGuard(ctx); err != nil {
-		return err
+		return "", err
 	}
 
 	interval := time.Duration(r.cfg.AutomaticInterval) * time.Minute
+	file := ""
 	for {
+		r.emit(Status{User: target, Phase: PhaseWaiting})
 		roomID, err := r.lookup.RoomIDForUser(ctx, user)
 		if err == nil {
 			var status tiktok.RoomStatus
 			status, err = r.lookup.RoomStatus(ctx, roomID)
 			if err == nil && status.Live {
+				r.emit(Status{User: target, Phase: PhaseLive, Detail: roomID, RoomID: roomID})
 				logLive(user, roomID, status)
-				err = r.capture(ctx, user, roomID)
+				var path string
+				path, err = r.capture(ctx, target, user, roomID)
+				if path != "" {
+					file = path
+				}
+				if ctx.Err() == nil {
+					r.emit(Status{User: target, Phase: PhaseWaiting})
+				}
 			} else if err == nil {
 				err = tiktok.ErrNotLive
 			}
@@ -221,27 +210,29 @@ func (r *Runner) automatic(ctx context.Context, user string) error {
 
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return file, nil
 			}
 			if tiktok.Transient(err) {
 				logx.Infof("@%s: %v", user, err)
+				r.emit(Status{User: target, Phase: PhaseWaiting, Detail: err.Error()})
 				if !wait(ctx, "waiting for next stream..", interval) {
-					return nil
+					return file, nil
 				}
 				continue
 			}
 			if tiktok.Fatal(err) {
-				return err
+				return file, err
 			}
 			logx.Errorf("connection problem: %v", err)
+			r.emit(Status{User: target, Phase: PhaseWaiting, Detail: err.Error()})
 			if !wait(ctx, "connection lost, retrying..", connectionBackoff) {
-				return nil
+				return file, nil
 			}
 			continue
 		}
 
 		if !wait(ctx, "waiting for next stream..", interval) {
-			return nil
+			return file, nil
 		}
 	}
 }
