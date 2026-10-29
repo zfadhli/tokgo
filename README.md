@@ -35,6 +35,9 @@ go build -o tokgo .
 | `-ffmpeg-path <PATH>` | Custom ffmpeg binary |
 | `-no-update-check` | Skip the release check |
 
+The single-dash names match the reference CLI; the usual `--user` form works
+too, and `tokgo help` (or `-h`) prints the same list.
+
 Passing one of `-user`, `-room_id`, `-url` is required for `manual` and
 `automatic`; passing more than one is an error.
 

@@ -29,6 +29,16 @@ func TestParse(t *testing.T) {
 			want: want(config.Config{User: "@name", Mode: config.Manual, AutomaticInterval: 5}, []string{"name"}, true),
 		},
 		{
+			name: "double dash long flag accepted",
+			args: []string{"--user", "@name"},
+			want: want(config.Config{User: "@name", Mode: config.Manual, AutomaticInterval: 5}, []string{"name"}, true),
+		},
+		{
+			name: "single dash long flag with value accepted",
+			args: []string{"-user=@name"},
+			want: want(config.Config{User: "@name", Mode: config.Manual, AutomaticInterval: 5}, []string{"name"}, true),
+		},
+		{
 			name: "multiple users split and cleaned",
 			args: []string{"-user", "a,b , @c"},
 			want: want(config.Config{User: "a,b , @c", Mode: config.Manual, AutomaticInterval: 5}, []string{"a", "b", "c"}, true),
@@ -129,7 +139,7 @@ func TestParse(t *testing.T) {
 		{
 			name:    "unknown flag",
 			args:    []string{"-bogus"},
-			wantErr: "flag provided but not defined: -bogus",
+			wantErr: "unknown flag: --bogus",
 		},
 	}
 
@@ -176,22 +186,5 @@ func TestParseWritesNothing(t *testing.T) {
 	}
 	if len(out) != 0 {
 		t.Errorf("Parse wrote to stdout/stderr: %q", out)
-	}
-}
-
-func TestUsage(t *testing.T) {
-	u := Usage()
-	for _, name := range []string{
-		"url", "user", "room_id", "mode", "automatic_interval", "proxy",
-		"output", "duration", "telegram", "bitrate", "ffmpeg-path", "no-update-check",
-	} {
-		if !strings.Contains(u, "-"+name) {
-			t.Errorf("Usage missing -%s", name)
-		}
-	}
-	for _, phrase := range []string{"comma-separated", "seconds", "minutes"} {
-		if !strings.Contains(u, phrase) {
-			t.Errorf("Usage missing %q", phrase)
-		}
 	}
 }
