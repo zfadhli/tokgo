@@ -37,7 +37,7 @@ var (
 const (
 	// phaseWidth is the phase column. The words are cue words, not Phase.String().
 	phaseWidth = 6
-	keysHint   = "enter submit · /help · ctrl+c stop"
+	keysHint   = "enter submit · tab complete · /help · ctrl+c stop"
 	emptyState = "no targets yet · type a username below"
 )
 
@@ -46,6 +46,16 @@ func (m *Model) size() (int, int) {
 		return 80, 24
 	}
 	return m.width, m.height
+}
+
+// hintLine shows what tab would complete while a command is being typed, and
+// the key reminder otherwise.
+func (m *Model) hintLine() string {
+	cands := m.candidates(m.input.Value())
+	if len(cands) == 0 {
+		return hintStyle.Render(keysHint)
+	}
+	return hintStyle.Render("tab  " + strings.Join(cands, " · "))
 }
 
 // View renders the header, the target table, the activity tail, the input and
@@ -63,7 +73,7 @@ func (m *Model) View() string {
 	lines = append(lines,
 		rule(w),
 		cut(m.input.View(), w),
-		cut(hintStyle.Render(keysHint), w),
+		cut(m.hintLine(), w),
 	)
 	for i := range lines {
 		lines[i] = cut(lines[i], w)
@@ -127,6 +137,9 @@ func (m *Model) headerRight(w int) string {
 	}
 	if !m.ended.IsZero() {
 		return m.outcome()
+	}
+	if len(m.list) > 0 {
+		return hintStyle.Render(fmt.Sprintf("idle · %d saved", len(m.list)))
 	}
 	return hintStyle.Render("idle · " + ui.Clock(0))
 }
@@ -225,6 +238,9 @@ func (m *Model) rowLine(t target, nameW int, withSize bool) string {
 // phaseCell gives the short cue word and its colour. A run being cancelled
 // reads stop on every row that has not reached a terminal phase yet.
 func (m *Model) phaseCell(t target) (string, lipgloss.Style) {
+	if t.idle {
+		return "idle", ghostStyle
+	}
 	if m.finishing && t.phase.Active() {
 		return "stop", warnStyle
 	}
@@ -260,6 +276,8 @@ func (m *Model) timer(t target) string {
 		now = time.Now()
 	}
 	switch {
+	case t.idle:
+		return ""
 	case t.phase == app.PhaseWaiting:
 		left := m.runInterval - now.Sub(t.since)
 		if left < 0 {

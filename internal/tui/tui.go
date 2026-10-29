@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +52,7 @@ type target struct {
 	bytes  int64
 	since  time.Time     // when the current phase started
 	active time.Duration // time spent in active phases, kept for the terminal row
+	idle   bool          // saved, not part of any run
 }
 
 // settings is what the input commands change between runs.
@@ -91,6 +93,10 @@ type Model struct {
 
 	targets     []target
 	byName      map[string]int
+	list        []string // saved targets, in the order they were added
+	userPath    string   // where list persists; "" disables saving
+	restarting  []string // targets to start again once their run is gone
+	compIdx     int      // cycling index into the live completion set
 	logs        []logLine
 	started     time.Time
 	ended       time.Time
@@ -157,6 +163,7 @@ func Run(version string) error {
 
 	m := New(version, uploads, cookies, ch)
 	m.push = push
+	m.loadSaved()
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
 	m.stop()
@@ -202,10 +209,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.line != nil {
 			m.appendLog(*msg.line)
 		}
+		var cmd tea.Cmd
 		if msg.st != nil {
-			m.applyStatus(*msg.st)
+			cmd = m.applyStatus(*msg.st)
 		}
-		return m, m.waitEvent()
+		return m, tea.Batch(m.waitEvent(), cmd)
 
 	case tickMsg:
 		m.now = time.Time(msg)
@@ -218,7 +226,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancel = nil
 		m.ctx = nil
 		m.users = nil
-		return m, nil
+		m.finishing = false
+		pending := m.restarting
+		m.restarting = nil
+		if len(pending) == 0 {
+			return m, nil
+		}
+		if err := m.launch(pending); err != nil {
+			m.warn(err.Error())
+			return m, nil
+		}
+		return m, m.runCmd()
 
 	case tea.KeyMsg:
 		return m.key(msg)
@@ -262,10 +280,14 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		return m, m.submit()
+	case "tab":
+		m.complete()
+		return m, nil
 	}
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	m.compIdx = 0
 	return m, cmd
 }
 
@@ -274,13 +296,15 @@ func (m *Model) submit() tea.Cmd {
 	if line == "" {
 		return nil
 	}
-	m.history = append(m.history, line)
-	m.histPos = len(m.history)
+	if !strings.HasPrefix(line, "/cookies ") {
+		m.history = append(m.history, line)
+		m.histPos = len(m.history)
+	}
 	m.input.SetValue("")
 	if strings.HasPrefix(line, "/") {
 		return m.command(line)
 	}
-	return m.enterTargets(splitTargets(line))
+	return m.startUsers(splitTargets(line))
 }
 
 func (m *Model) recall(delta int) {
@@ -301,6 +325,7 @@ func (m *Model) stopRun() {
 		return
 	}
 	m.finishing = true
+	m.restarting = nil
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
@@ -339,7 +364,7 @@ func (m *Model) launch(names []string) error {
 	m.ended = time.Time{}
 	m.finishing = false
 	m.result = nil
-	m.targets, m.byName = m.seed(cfg, parsed.Users, now)
+	m.seed(cfg, parsed.Users, now)
 	runner.OnStatus(func(s app.Status) {
 		if m.push != nil {
 			m.push(event{st: &s})
@@ -355,16 +380,15 @@ func (m *Model) runCmd() tea.Cmd {
 	}
 }
 
-func (m *Model) enterTargets(names []string) tea.Cmd {
+// startUsers starts a run when idle and adds to the live one otherwise. Both
+// paths remember the names first, so what the screen shows is what it saves.
+func (m *Model) startUsers(names []string) tea.Cmd {
 	if len(names) == 0 {
 		return nil
 	}
+	m.remember(names)
 	if m.ctrl != nil {
-		for _, name := range names {
-			if err := m.ctrl.AddUser(name); err != nil && !errors.Is(err, app.ErrUserRunning) {
-				m.warn(err.Error())
-			}
-		}
+		m.addToRun(names)
 		return nil
 	}
 	if err := m.launch(names); err != nil {
@@ -374,23 +398,241 @@ func (m *Model) enterTargets(names []string) tea.Cmd {
 	return m.runCmd()
 }
 
+func (m *Model) addToRun(names []string) {
+	for _, name := range names {
+		if err := m.ctrl.AddUser(name); err != nil && !errors.Is(err, app.ErrUserRunning) {
+			m.warn(err.Error())
+		}
+	}
+}
+
+// loadSaved reads the target list and lists it, so the screen opens on what the
+// last session saved.
+func (m *Model) loadSaved() {
+	m.userPath = targetFile()
+	m.list = loadTargets(m.userPath)
+	m.syncRows()
+}
+
+// syncRows gives every saved name a row. Rows already on screen, running or
+// terminal, are left alone.
+func (m *Model) syncRows() {
+	now := m.now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	for _, name := range m.list {
+		if _, ok := m.byName[name]; ok {
+			continue
+		}
+		m.targets = append(m.targets, target{user: name, label: statusLabel(name), idle: true, since: now})
+		m.byName[name] = len(m.targets) - 1
+	}
+}
+
+// remember appends unseen usernames to the saved list and writes it back. A url
+// or a room id cannot be saved: they only ever run once.
+func (m *Model) remember(names []string) {
+	added := false
+	for _, name := range names {
+		if isRoomID(name) || strings.Contains(name, "tiktok.com") {
+			m.warn("only usernames are saved · " + name + " runs once")
+			continue
+		}
+		if !isUsername(name) {
+			m.warn("not a username · " + name)
+			continue
+		}
+		if slices.Contains(m.list, name) {
+			continue
+		}
+		m.list = append(m.list, name)
+		added = true
+	}
+	if !added {
+		return
+	}
+	if m.userPath != "" {
+		if err := saveTargets(m.userPath, m.list); err != nil {
+			m.warn("cannot save the target list: " + err.Error())
+		}
+	}
+	m.syncRows()
+}
+
+// restart stops one target and starts it again once its recording is gone. The
+// terminal status only arrives after the remux, so the two never overlap.
+func (m *Model) restart(raw string) tea.Cmd {
+	user := strings.TrimPrefix(strings.TrimSpace(raw), "@")
+	if user == "" {
+		m.warn("restart needs a username")
+		return nil
+	}
+	m.remember([]string{user})
+	if m.ctrl == nil {
+		return m.startUsers([]string{user})
+	}
+	if !m.ctrl.DropUser(user) {
+		m.addToRun([]string{user})
+		return nil
+	}
+	m.restarting = append(m.restarting, user)
+	m.appendLog(logLine{level: "START", text: "restarting @" + user})
+	return nil
+}
+
+// setCookies stores the TikTok login cookie and writes it back for the next
+// launch. The value itself never reaches the activity pane.
+func (m *Model) setCookies(raw string) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		if set := m.cookies["sessionid_ss"]; set != "" {
+			m.appendLog(logLine{level: "INFO", text: "sessionid_ss " + maskSecret(set)})
+			return
+		}
+		m.warn("no sessionid_ss set · /cookies <value>")
+		return
+	}
+	if m.cookies == nil {
+		m.cookies = map[string]string{}
+	}
+	m.cookies["sessionid_ss"] = value
+	if err := boot.SaveCookies(boot.CookieFile, m.cookies); err != nil {
+		m.warn("cannot write cookies.json: " + err.Error())
+	} else {
+		m.appendLog(logLine{level: "INFO", text: "sessionid_ss " + maskSecret(value) + " saved to cookies.json"})
+	}
+	m.nextRun("cookies")
+}
+
+// maskSecret keeps a credential out of the activity pane. The last four bytes
+// are enough to tell two values apart.
+func maskSecret(v string) string {
+	if len(v) > 4 {
+		return "••••" + v[len(v)-4:]
+	}
+	return "••••"
+}
+
 func (m *Model) warn(text string) {
 	m.appendLog(logLine{level: "WARN", text: text})
 }
 
-var helpLines = []string{
-	"/add <name,...>  add targets, or start a run when idle",
-	"/once             record one session per target",
-	"/wait             wait for the next stream (default)",
-	"/duration <min>   cap each session in minutes, 0 = no cap",
-	"/interval <min>   minutes between liveness polls, minimum 1",
-	"/output <dir>     output directory",
-	"/proxy <url>      proxy for lookups, alone clears it",
-	"/telegram on|off  upload each recording when it is written",
-	"/drop <user>      stop recording one target",
-	"/stop             stop the run and remux what was captured",
-	"/quit             leave now, without finishing a remux",
-	"/help             show this list",
+// command is one input-line command: what the help prints, and what tab
+// completes.
+type command struct {
+	name string
+	args string // argument hint; "" when the command takes none
+	help string
+}
+
+var commands = []command{
+	{"add", "<name,...>", "save names to the list, and add them to a live run"},
+	{"start", "<name|all>", "start one saved target, or every saved target"},
+	{"restart", "<name>", "stop one target, let it remux, then start it again"},
+	{"cookies", "<sessionid_ss>", "set the TikTok login cookie, saved to cookies.json"},
+	{"drop", "<name>", "stop one target, keep it in the list"},
+	{"once", "", "record one session per target"},
+	{"wait", "", "wait for the next stream (default)"},
+	{"duration", "<min>", "cap each session in minutes, 0 = no cap"},
+	{"interval", "<min>", "minutes between liveness polls, minimum 1"},
+	{"output", "<dir>", "output directory"},
+	{"proxy", "<url>", "proxy for lookups, alone clears it"},
+	{"telegram", "on|off", "upload each recording when it is written"},
+	{"stop", "", "stop the run and remux what was captured"},
+	{"quit", "", "leave now, without finishing a remux"},
+	{"help", "", "show this list"},
+}
+
+// candidates lists whole replacement lines for tab: the command names while the
+// first word is typed, then the argument of the command that is spelled out.
+func (m *Model) candidates(value string) []string {
+	if !strings.HasPrefix(value, "/") {
+		return nil
+	}
+	name, arg, hasArg := strings.Cut(value, " ")
+	if !hasArg {
+		var out []string
+		typed := strings.TrimPrefix(value, "/")
+		for _, c := range commands {
+			if strings.HasPrefix(c.name, typed) {
+				out = append(out, "/"+c.name)
+			}
+		}
+		return out
+	}
+	if strings.ContainsAny(arg, " ,") {
+		return nil
+	}
+	var out []string
+	names := func() {
+		for _, user := range m.usernames() {
+			if strings.HasPrefix(user, arg) {
+				out = append(out, name+" "+user)
+			}
+		}
+	}
+	switch name {
+	case "/start":
+		if strings.HasPrefix("all", arg) {
+			out = append(out, "/start all")
+		}
+		names()
+	case "/restart", "/drop", "/add":
+		names()
+	case "/telegram":
+		for _, mode := range []string{"on", "off"} {
+			if strings.HasPrefix(mode, arg) {
+				out = append(out, "/telegram "+mode)
+			}
+		}
+	}
+	return out
+}
+
+// usernames is the completion pool: the saved list in order, then whatever the
+// run holds that the list does not.
+func (m *Model) usernames() []string {
+	out := append([]string(nil), m.list...)
+	for _, t := range m.targets {
+		if t.user == "" || slices.Contains(out, t.user) {
+			continue
+		}
+		out = append(out, t.user)
+	}
+	return out
+}
+
+// complete fills the longest shared prefix, then cycles the candidates on each
+// further tab. A bare command gets a trailing space so the next word is clean.
+func (m *Model) complete() {
+	cands := m.candidates(m.input.Value())
+	if len(cands) == 0 {
+		return
+	}
+	value := cands[0]
+	for _, cand := range cands[1:] {
+		value = commonPrefix(value, cand)
+	}
+	if len(value) > len(m.input.Value()) {
+		m.compIdx = 0
+	} else {
+		value = cands[m.compIdx%len(cands)]
+		m.compIdx++
+	}
+	if !strings.Contains(value, " ") {
+		value += " "
+	}
+	m.input.SetValue(value)
+	m.input.CursorEnd()
+}
+
+func commonPrefix(a, b string) string {
+	i := 0
+	for i < len(a) && i < len(b) && a[i] == b[i] {
+		i++
+	}
+	return a[:i]
 }
 
 func (m *Model) command(line string) tea.Cmd {
@@ -398,7 +640,33 @@ func (m *Model) command(line string) tea.Cmd {
 	rest = strings.TrimSpace(rest)
 	switch name {
 	case "add":
-		return m.enterTargets(splitTargets(rest))
+		names := splitTargets(rest)
+		if len(names) == 0 {
+			m.warn("add needs a username")
+			break
+		}
+		m.remember(names)
+		if m.ctrl != nil {
+			m.addToRun(names)
+		}
+	case "start":
+		if rest == "" {
+			m.warn("start needs a username or all")
+			break
+		}
+		if rest != "all" {
+			return m.startUsers(splitTargets(rest))
+		}
+		names := append([]string(nil), m.list...)
+		if len(names) == 0 {
+			m.warn("no saved targets · /add <name>")
+			break
+		}
+		return m.startUsers(names)
+	case "restart":
+		return m.restart(rest)
+	case "cookies":
+		m.setCookies(rest)
 	case "once":
 		m.settings.once = true
 		m.nextRun("once")
@@ -432,8 +700,8 @@ func (m *Model) command(line string) tea.Cmd {
 		m.quit = true
 		return tea.Quit
 	case "help":
-		for _, help := range helpLines {
-			m.appendLog(logLine{level: "INFO", text: help})
+		for _, c := range commands {
+			m.appendLog(logLine{level: "INFO", text: padRight("/"+c.name+" "+c.args, 18) + " " + c.help})
 		}
 	default:
 		m.warn("unknown command /" + name)
@@ -480,6 +748,7 @@ func (m *Model) drop(raw string) {
 		m.warn(app.ErrNotRunning.Error())
 		return
 	}
+	m.forgetRestart(user)
 	m.ctrl.DropUser(user)
 }
 
@@ -512,34 +781,46 @@ func withFlag(args []string, flag, raw string) []string {
 }
 
 // seed lists the targets the settings promised before any status arrives, so
-// the screen never opens empty.
-func (m *Model) seed(cfg config.Config, users []string, now time.Time) ([]target, map[string]int) {
-	var rows []target
-	add := func(user, label string) {
-		rows = append(rows, target{user: user, label: label, since: now})
+// the screen never opens empty: the url or room id of this run, the saved names
+// still idle, then the names this run holds.
+func (m *Model) seed(cfg config.Config, users []string, now time.Time) {
+	m.targets = nil
+	m.byName = make(map[string]int, len(m.list)+len(users)+1)
+	add := func(row target) {
+		m.byName[row.user] = len(m.targets)
+		m.targets = append(m.targets, row)
 	}
 	switch {
-	case len(users) > 1:
-		for _, user := range users {
-			add(user, "@"+user)
-		}
 	case cfg.URL != "":
-		add("", cfg.URL)
+		add(target{label: cfg.URL, since: now})
 	case cfg.RoomID != "":
-		add("", "room "+cfg.RoomID)
-	case len(users) == 1:
-		add(users[0], "@"+users[0])
+		add(target{label: "room " + cfg.RoomID, since: now})
 	}
-	byName := make(map[string]int, len(rows))
-	for i, row := range rows {
-		byName[row.user] = i
+	for _, name := range m.list {
+		if _, ok := m.byName[name]; ok {
+			continue
+		}
+		add(target{user: name, label: statusLabel(name), idle: true, since: now})
 	}
-	return rows, byName
+	for _, user := range users {
+		i, ok := m.byName[user]
+		if !ok {
+			add(target{user: user, label: statusLabel(user), phase: app.PhaseQueued, since: now})
+			continue
+		}
+		t := &m.targets[i]
+		t.idle = false
+		t.phase = app.PhaseQueued
+		t.bytes = 0
+		t.active = 0
+		t.since = now
+	}
 }
 
 // applyStatus merges one status into the rows. An unknown user becomes a row,
-// so a target added mid-run shows up without a separate list.
-func (m *Model) applyStatus(s app.Status) {
+// so a target added mid-run shows up without a separate list. A terminal status
+// is also the moment a restarted target is handed back to the runner.
+func (m *Model) applyStatus(s app.Status) tea.Cmd {
 	now := m.now
 	if now.IsZero() {
 		now = time.Now()
@@ -551,6 +832,7 @@ func (m *Model) applyStatus(s app.Status) {
 		m.byName[s.User] = i
 	}
 	t := &m.targets[i]
+	t.idle = false
 	if t.phase != s.Phase {
 		if t.phase.Active() {
 			t.active += now.Sub(t.since)
@@ -563,6 +845,37 @@ func (m *Model) applyStatus(s app.Status) {
 	}
 	if s.Bytes > 0 {
 		t.bytes = s.Bytes
+	}
+	m.resume(s.User, s.Phase)
+	return nil
+}
+
+// forgetRestart drops a queued restart, so a later drop wins over an earlier
+// restart.
+func (m *Model) forgetRestart(user string) {
+	if i := slices.Index(m.restarting, user); i >= 0 {
+		m.restarting = slices.Delete(m.restarting, i, i+1)
+	}
+}
+
+// resume hands a restarting target back to the live run. A run that is already
+// gone keeps the name queued for runDoneMsg, which launches the next one.
+func (m *Model) resume(user string, phase app.Phase) {
+	if !phase.Terminal() || m.ctrl == nil {
+		return
+	}
+	i := slices.Index(m.restarting, user)
+	if i < 0 {
+		return
+	}
+	switch err := m.ctrl.AddUser(user); {
+	case err == nil:
+		m.restarting = slices.Delete(m.restarting, i, i+1)
+	case errors.Is(err, app.ErrNotRunning):
+		return
+	default:
+		m.restarting = slices.Delete(m.restarting, i, i+1)
+		m.warn(err.Error())
 	}
 }
 
@@ -627,6 +940,22 @@ func isRoomID(s string) bool {
 	}
 	for _, r := range s {
 		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// isUsername accepts what TikTok allows in a handle: 2 to 24 letters, digits,
+// underscores and periods. Room ids and urls are refused before it is asked.
+func isUsername(s string) bool {
+	if len(s) < 2 || len(s) > 24 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '.':
+		default:
 			return false
 		}
 	}
