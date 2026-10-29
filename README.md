@@ -234,7 +234,7 @@ TikTok, and the same signed room URL works through both TLS stacks.
 Recorded on 2026-10-29 against `@aljazeeraenglish` and `@tiktok`:
 
 - `-user` → tikrec sign → room id → liveness → capture:
-  `aljazeeraenglish=20261028_172928.mp4`, ffprobe `h264 1280x720 25fps + aac`,
+  `aljazeeraenglish=20261029_*.mp4`, ffprobe `h264 1280x720 25fps + aac`,
   2.0 MB for 8.18 s.
 - 60 s cap with `-race`: exit 0, no data race, 62.19 s container (the CDN pushes
   roughly 2 s of buffered media on connect), 1.93 Mbps, 15 MB.
