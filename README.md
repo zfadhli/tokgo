@@ -6,7 +6,7 @@
 **tokgo** records a TikTok live stream to a playable mp4. It waits for the
 account to go live, records every reconnect, and remuxes the capture with ffmpeg
 stream copy. One Go binary, no Python runtime, plus an interactive `tokgo tui`
-form for the same run.
+monitor that records several accounts at once.
 
 ## Quick start
 
@@ -30,7 +30,7 @@ written. Press it twice to abort immediately and keep the raw `.ts` segments.
 ## What a run looks like
 
 ```text
-tokgo v0.1.2 — TikTok LIVE recorder
+tokgo v0.2.0 — TikTok LIVE recorder
 https://github.com/zfadhli/tokgo · MIT License
 
   target  @skynews · record once
@@ -100,16 +100,36 @@ a flapping stream cannot over-record.
 tokgo tui
 ```
 
-An interactive form for the same run, built on Bubble Tea: a wait/record-once
-chip, one target field that accepts a username, a live URL or a numeric room id,
-then duration, output directory, proxy and the Telegram toggle. The form is
-turned into argv and validated by the same parser the flags use, so it cannot
-accept a combination the CLI would reject or miss one it allows.
+A Bubble Tea monitor for the same engine, built around recording several
+accounts at once. Setup is one form: a wait/record-once chip, a targets field
+that takes a comma or space separated list of usernames, live URLs or room ids,
+then duration, poll interval, output directory, proxy and the Telegram toggle.
+The form is turned into argv and validated by the same parser the flags use, so
+it cannot accept a combination the CLI would reject or miss one it allows.
 
-Starting swaps to a live view: target, mode, elapsed time against the `-duration`
-cap, and the tail of the runner's log. Ctrl-C stops the capture and lets the
-remux finish; a second press quits immediately. `r` starts a new run with the
-form still filled in.
+```text
+tokgo v0.2.0 · monitor                          ● 1 recording · 3 targets · 00:15
+────────────────────────────────────────────────────────────────────────────────
+targets                                     activity
+▸ @aljazeeraenglish REC      00:15     3 MB   • @natgeo: the user is not hostin…
+  @natgeo           wait    -02:44            • @donut_ntp.42: the user is not …
+  @donut_ntp.42     wait    -02:44            • @aljazeeraenglish · room 769963…
+@aljazeeraenglish · room 76996314529211543…   • title "Al Jazeera English TikTo…
+aljazeeraenglish=20261030_000319.000.ts       ▶ aljazeeraenglish=20261030_000319
+
+  ↑↓ select · a add · x drop · ctrl+c stop · q quit
+```
+
+Every target gets a row with its phase, its timer and the bytes on disk, while
+the activity pane keeps the runner's log. `↑`/`↓` moves the selection and the
+block underneath shows the selected target's room, output file and latest detail
+line. `a` adds a target to the running session without restarting the others, `x`
+drops just the selected one.
+
+Ctrl-C stops the run: the capture is finalised, the remux finishes, and every
+row shows its final size and the total time it ran. Press it again to quit
+without waiting for the remux. `r` goes back to the form with the fields still
+filled in. Below 72 columns the activity pane is dropped rather than squeezed.
 
 ## How it works
 
