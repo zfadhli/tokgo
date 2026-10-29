@@ -5,13 +5,13 @@
       "id": "1",
       "subject": "Write shared foundation: go.mod, config, tiktok types, errors, liveurl ordering",
       "description": "Blocking first step. No fan-out is possible until the shared types and interfaces exist, because all three workstreams import them. Files: go.mod, internal/config/config.go, internal/tiktok/types.go, internal/tiktok/errors.go, internal/tiktok/liveurl.go + liveurl_test.go. Semantics from reference: quality ordering by `level` desc with unknown=-1, legacy fallbacks FULL_HD1,HD1,SD2,SD1, then hls, rtmp, dedup preserving order.",
-      "status": "in_progress",
+      "status": "completed",
       "activeForm": "Writing shared foundation",
       "metadata": {},
       "blocks": [],
       "blockedBy": [],
       "createdAt": 1793250625678,
-      "updatedAt": 1793250628155
+      "updatedAt": 1793252194395
     },
     {
       "id": "2",
