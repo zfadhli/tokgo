@@ -5,3 +5,5 @@ tokgo
 cookies.json
 telegram.json
 output/
+.pi/
+.crew/
