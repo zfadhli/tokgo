@@ -604,40 +604,80 @@ func TestEmptyStateLine(t *testing.T) {
 	}
 }
 
-// TestLongNamesWidenTheList proves the account name survives at 80 columns:
-// the table takes the width instead of clipping the identifier.
+// TestLongNamesWidenTheList proves the account name survives at 120 columns:
+// the column takes the width instead of clipping the identifier.
 func TestLongNamesWidenTheList(t *testing.T) {
 	m := newModel()
+	m.width, m.height = 120, 24
 	m.ctrl = &fakeCtrl{}
 	m.started = m.now
 	m.applyStatus(app.Status{User: "aljazeeraenglish", Phase: app.PhaseRecording, Bytes: 1 << 20})
 	v := m.View()
 	if !strings.Contains(v, "@aljazeeraenglish") {
-		t.Fatalf("the name was clipped at 80 columns:\n%s", v)
+		t.Fatalf("the name was clipped at 120 columns:\n%s", v)
 	}
 	for _, line := range strings.Split(v, "\n") {
-		if got := lipgloss.Width(line); got > 80 {
+		if got := lipgloss.Width(line); got > 120 {
 			t.Fatalf("line is %d wide:\n%s", got, v)
 		}
 	}
 }
 
-// TestLayoutFitsTheTerminal guards the whole screen: exactly h lines and
-// nothing wider than w in every state.
-// TestTableColumnsStayTogether proves the wide window does not stretch the name
-// column: the phase and size sit next to the label, not at the far edge.
-func TestTableColumnsStayTogether(t *testing.T) {
+// TestRowsSitInTheirColumn proves the split is real: each name lands inside the
+// span of its own column header, and the header counts the rows.
+func TestRowsSitInTheirColumn(t *testing.T) {
 	m := newModel()
-	m.width, m.height = 120, 24
-	m.applyStatus(app.Status{User: "natgeo", Phase: app.PhaseWaiting})
-	m.applyStatus(app.Status{User: "aljazeeraenglish", Phase: app.PhaseRecording, Bytes: 1 << 20})
-	for _, line := range strings.Split(m.View(), "\n") {
-		if !strings.HasPrefix(line, "  @") {
-			continue
+	m.width, m.height = 100, 24
+	m.list = savedList("alpha", "beta")
+	m.syncRows()
+	m.applyStatus(app.Status{User: "gamma", Phase: app.PhaseWaiting})
+	m.applyStatus(app.Status{User: "delta", Phase: app.PhaseRecording})
+
+	lines := strings.Split(m.View(), "\n")
+	if !strings.Contains(lines[2], "idle 2") || !strings.Contains(lines[2], "polling 1") || !strings.Contains(lines[2], "live 1") {
+		t.Fatalf("the header must count each column:\n%s", lines[2])
+	}
+	colW := colWidth(100)
+	spans := map[string][2]int{
+		"@alpha": {0, colW},
+		"@gamma": {colW + colGap, 2*colW + colGap},
+		"@delta": {2*colW + 2*colGap, 100},
+	}
+	for label, span := range spans {
+		found := false
+		for _, line := range lines[3:] {
+			i := strings.Index(line, label)
+			if i < 0 {
+				continue
+			}
+			found = true
+			if i < span[0] || i >= span[1] {
+				t.Fatalf("%s sits at %d, outside its column %v:\n%s", label, i, span, line)
+			}
 		}
-		if strings.Contains(line, strings.Repeat(" ", 20)) {
-			t.Fatalf("the table is stretched across the terminal:\n%s", line)
+		if !found {
+			t.Fatalf("%s is not on screen:\n%s", label, m.View())
 		}
+	}
+}
+
+// TestTerminalRowsReturnToIdle proves a finished target does not hold a live
+// column slot.
+func TestTerminalRowsReturnToIdle(t *testing.T) {
+	m := newModel()
+	m.width, m.height = 100, 24
+	m.applyStatus(app.Status{User: "done", Phase: app.PhaseDone})
+	m.applyStatus(app.Status{User: "rec", Phase: app.PhaseRecording})
+	lines := strings.Split(m.View(), "\n")
+	if !strings.Contains(lines[2], "idle 1") || !strings.Contains(lines[2], "live 1") {
+		t.Fatalf("a done target must count as idle:\n%s", lines[2])
+	}
+	colW := colWidth(100)
+	if i := strings.Index(lines[3], "@done"); i < 0 || i >= colW {
+		t.Fatalf("the done row must sit in the idle column:\n%s", lines[3])
+	}
+	if i := strings.Index(lines[3], "@rec"); i < 2*colW+2*colGap {
+		t.Fatalf("the recording row must sit in the live column:\n%s", lines[3])
 	}
 }
 

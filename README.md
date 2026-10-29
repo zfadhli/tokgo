@@ -100,17 +100,15 @@ a flapping stream cannot over-record.
 tokgo tui
 ```
 
-One screen, like a terminal assistant: a target table and the runner's log above,
-an input line pinned to the bottom, and every command typed where the cursor is.
-Nothing switches screens.
+One screen, like a terminal assistant: the targets in three columns, idle, polling
+and live, the runner's log under them, an input line pinned to the bottom, and
+every command typed where the cursor is. Nothing switches screens.
 
 ```text
-tokgo 0.2.0 · monitor                                 ● 1 recording · 3 targets · 00:14
+tokgo 0.2.0 · monitor                                   ● 1 recording · 3 targets · 00:12
 ────────────────────────────────────────────────────────────────────────────────────────
-targets
-  @aljazeeraenglish REC      00:12     2 MB
-  @natgeo           wait    -02:46
-  @donut_ntp.42     idle
+idle 1                        polling 1                     live 1
+idle   @donut_ntp.…           wait   @natgeo        -00:14  REC    @aljazeerae…    00:12
 activity
   • @natgeo: the user is not hosting a live stream at the moment
   • @aljazeeraenglish · room 7699631452921154317 · LIVE
@@ -171,8 +169,9 @@ Ctrl-C is not bound here, so a stray one cannot abandon a remux. Validation goes
 through the same parser the flags use, so a command cannot accept a combination
 the CLI would reject.
 
-Below 60 columns the size column is dropped and the table keeps the name, phase
-and timer.
+Below 72 columns the three columns fold back into one list, which keeps the name,
+the phase, the timer and the size. A target that is done, stopped or failed goes
+back to the idle column, so a live slot never holds a finished capture.
 
 ## How it works
 
