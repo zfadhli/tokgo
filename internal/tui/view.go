@@ -139,6 +139,9 @@ func (m *Model) headerRight(w int) string {
 		return m.outcome()
 	}
 	if len(m.list) > 0 {
+		if n := len(m.autoNames()); n > 0 {
+			return hintStyle.Render(fmt.Sprintf("idle · %d saved · %d auto", len(m.list), n))
+		}
 		return hintStyle.Render(fmt.Sprintf("idle · %d saved", len(m.list)))
 	}
 	return hintStyle.Render("idle · " + ui.Clock(0))
@@ -239,6 +242,9 @@ func (m *Model) rowLine(t target, nameW int, withSize bool) string {
 // reads stop on every row that has not reached a terminal phase yet.
 func (m *Model) phaseCell(t target) (string, lipgloss.Style) {
 	if t.idle {
+		if t.auto {
+			return "auto", lookupStyle
+		}
 		return "idle", ghostStyle
 	}
 	if m.finishing && t.phase.Active() {
