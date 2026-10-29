@@ -100,36 +100,54 @@ a flapping stream cannot over-record.
 tokgo tui
 ```
 
-A Bubble Tea monitor for the same engine, built around recording several
-accounts at once. Setup is one form: a wait/record-once chip, a targets field
-that takes a comma or space separated list of usernames, live URLs or room ids,
-then duration, poll interval, output directory, proxy and the Telegram toggle.
-The form is turned into argv and validated by the same parser the flags use, so
-it cannot accept a combination the CLI would reject or miss one it allows.
+One screen, like a terminal assistant: a target table and the runner's log above,
+an input line pinned to the bottom, and every command typed where the cursor is.
+Nothing switches screens.
 
 ```text
-tokgo v0.2.0 · monitor                          ● 1 recording · 3 targets · 00:15
-────────────────────────────────────────────────────────────────────────────────
-targets                                     activity
-▸ @aljazeeraenglish REC      00:15     3 MB   • @natgeo: the user is not hostin…
-  @natgeo           wait    -02:44            • @donut_ntp.42: the user is not …
-  @donut_ntp.42     wait    -02:44            • @aljazeeraenglish · room 769963…
-@aljazeeraenglish · room 76996314529211543…   • title "Al Jazeera English TikTo…
-aljazeeraenglish=20261030_000319.000.ts       ▶ aljazeeraenglish=20261030_000319
-
-  ↑↓ select · a add · x drop · ctrl+c stop · q quit
+tokgo v0.2.0 · monitor                                 ● 1 recording · 3 targets · 00:14
+────────────────────────────────────────────────────────────────────────────────────────
+targets
+  @aljazeeraenglish REC      00:12     2 MB
+  @natgeo           wait    -02:46
+  @donut_ntp.42     wait    -02:46
+activity
+  • @natgeo: the user is not hosting a live stream at the moment
+  • @donut_ntp.42: the user is not hosting a live stream at the moment
+  • @aljazeeraenglish · room 7699631452921154317 · LIVE
+  • title "Al Jazeera English TikTok LIVE"
+  ▶ aljazeeraenglish=20261030_004845
+────────────────────────────────────────────────────────────────────────────────────────
+›
+enter submit · /help · ctrl+c stop
 ```
 
-Every target gets a row with its phase, its timer and the bytes on disk, while
-the activity pane keeps the runner's log. `↑`/`↓` moves the selection and the
-block underneath shows the selected target's room, output file and latest detail
-line. `a` adds a target to the running session without restarting the others, `x`
-drops just the selected one.
+Typing usernames, live URLs or room ids and pressing enter starts a run, or adds
+to the one already going. Each row carries the phase, the timer and the bytes on
+disk; the log pane keeps the rest, attributed per account.
 
-Ctrl-C stops the run: the capture is finalised, the remux finishes, and every
-row shows its final size and the total time it ran. Press it again to quit
-without waiting for the remux. `r` goes back to the form with the fields still
-filled in. Below 72 columns the activity pane is dropped rather than squeezed.
+| Command | Meaning |
+|---|---|
+| `/add <name,...>` | add targets, same as typing them |
+| `/once`, `/wait` | record one session per target, or keep waiting (default) |
+| `/duration <min>` | capture cap per session, `0` for none |
+| `/interval <min>` | minutes between liveness polls, minimum 1 |
+| `/output <dir>` | where recordings land |
+| `/proxy <url>` | proxy for lookups, alone clears it |
+| `/telegram on\|off` | upload each recording when it is written |
+| `/drop <user>` | stop recording one target, the others keep going |
+| `/stop` | stop the run, finish the capture and remux |
+| `/quit` | leave now, without waiting for a remux |
+| `/help` | print the list |
+
+Settings changes apply to the next run and say so if one is in flight; nothing is
+restarted behind your back. `up`/`down` walk the lines you submitted before, `esc`
+stops a run or clears the line, and Ctrl-C stops and then quits. Validation goes
+through the same parser the flags use, so a command cannot accept a combination
+the CLI would reject.
+
+Below 60 columns the size column is dropped and the table keeps the name, phase
+and timer.
 
 ## How it works
 
