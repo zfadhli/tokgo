@@ -105,46 +105,54 @@ an input line pinned to the bottom, and every command typed where the cursor is.
 Nothing switches screens.
 
 ```text
-tokgo v0.2.0 · monitor                                 ● 1 recording · 3 targets · 00:14
+tokgo 0.2.0 · monitor                                 ● 1 recording · 3 targets · 00:14
 ────────────────────────────────────────────────────────────────────────────────────────
 targets
   @aljazeeraenglish REC      00:12     2 MB
   @natgeo           wait    -02:46
-  @donut_ntp.42     wait    -02:46
+  @donut_ntp.42     idle
 activity
   • @natgeo: the user is not hosting a live stream at the moment
-  • @donut_ntp.42: the user is not hosting a live stream at the moment
   • @aljazeeraenglish · room 7699631452921154317 · LIVE
   • title "Al Jazeera English TikTok LIVE"
   ▶ aljazeeraenglish=20261030_004845
 ────────────────────────────────────────────────────────────────────────────────────────
-›
-enter submit · /help · ctrl+c stop
+› /start al
+tab  /start all · /start aljazeeraenglish
 ```
 
-Typing usernames, live URLs or room ids and pressing enter starts a run, or adds
-to the one already going. Each row carries the phase, the timer and the bytes on
-disk; the log pane keeps the rest, attributed per account.
+`/add` saves a name, `/start` records it. The list outlives the session: the
+screen opens with one idle row per saved name, and
+`~/.config/tokgo/targets.txt` holds them, one username per line, so it can be
+edited by hand. Typing usernames without a slash also starts them and saves
+them. Live URLs and room ids run once and are not saved.
+
+Tab completes a command name or a saved username, and the hint line under the
+input shows what tab would fill.
 
 | Command | Meaning |
 |---|---|
-| `/add <name,...>` | add targets, same as typing them |
+| `/add <name,...>` | save targets, and add them to a live run |
+| `/start <name\|all>` | start one saved target, or every saved target |
+| `/restart <name>` | stop one target, remux it, then start it again |
+| `/cookies <value>` | set `sessionid_ss` and save it to `cookies.json` |
+| `/drop <user>` | stop recording one target, the others keep going; the name stays saved |
 | `/once`, `/wait` | record one session per target, or keep waiting (default) |
 | `/duration <min>` | capture cap per session, `0` for none |
 | `/interval <min>` | minutes between liveness polls, minimum 1 |
 | `/output <dir>` | where recordings land |
 | `/proxy <url>` | proxy for lookups, alone clears it |
 | `/telegram on\|off` | upload each recording when it is written |
-| `/drop <user>` | stop recording one target, the others keep going |
 | `/stop` | stop the run, finish the capture and remux |
 | `/quit` | leave now, without waiting for a remux |
 | `/help` | print the list |
 
 Settings changes apply to the next run and say so if one is in flight; nothing is
-restarted behind your back. `up`/`down` walk the lines you submitted before, `esc`
-stops a run or clears the line, and Ctrl-C stops and then quits. Validation goes
-through the same parser the flags use, so a command cannot accept a combination
-the CLI would reject.
+restarted behind your back. `/restart` is the one command that does restart
+something, and only after the old capture has been remuxed. `up`/`down` walk the
+lines you submitted before, `esc` stops a run or clears the line, and Ctrl-C
+stops and then quits. Validation goes through the same parser the flags use, so
+a command cannot accept a combination the CLI would reject.
 
 Below 60 columns the size column is dropped and the table keeps the name, phase
 and timer.
@@ -201,6 +209,9 @@ working directory. `sessionid_ss` is the one that carries a login:
 Cookies are sent to both `www.tiktok.com` and `webcast.tiktok.com`; the per-host
 cookie jar would otherwise leave the webcast API unauthenticated, which is
 exactly the endpoint a login-gated room needs. A missing file is fine.
+
+In the TUI, `/cookies <value>` sets `sessionid_ss` and writes this file, mode
+`0600`. The activity pane only shows the last four characters.
 
 `telegram.json` for `-telegram`:
 
