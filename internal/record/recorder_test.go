@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -223,5 +224,97 @@ func collect(t *testing.T, rec *Recorder, ctx context.Context) (string, error) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("Record did not return within 15s")
 		return "", nil
+	}
+}
+
+// sinkStub is a capture sink whose Write can be made to fail.
+type sinkStub struct {
+	mu    sync.Mutex
+	buf   bytes.Buffer
+	err   error
+	stops int
+}
+
+func (s *sinkStub) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return 0, s.err
+	}
+	return s.buf.Write(p)
+}
+
+func (s *sinkStub) Interrupt() {
+	s.mu.Lock()
+	s.stops++
+	s.mu.Unlock()
+}
+
+func (s *sinkStub) Finish() error { return nil }
+
+func (s *sinkStub) bytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.buf.Bytes()...)
+}
+
+// errorBody hands out its payload once, then fails instead of reaching EOF.
+type errorBody struct {
+	data []byte
+	err  error
+}
+
+func (b *errorBody) Read(p []byte) (int, error) {
+	if b.data == nil {
+		return 0, b.err
+	}
+	n := copy(p, b.data)
+	b.data = nil
+	return n, nil
+}
+
+func (b *errorBody) Close() error { return nil }
+
+// A write failure is not a CDN hiccup: it comes back as its own error so the
+// caller can keep the bytes instead of reconnecting.
+func TestCopyStreamReportsWriteErrorsSeparately(t *testing.T) {
+	sink := &sinkStub{err: syscall.ENOSPC}
+	n, err := copyStream(context.Background(), sink, io.NopCloser(bytes.NewReader(streamBytes())), time.Time{})
+	var writeErr *writeError
+	if !errors.As(err, &writeErr) {
+		t.Fatalf("copyStream error = %v, want a write failure", err)
+	}
+	if !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("copyStream error hides the cause: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("copyStream counted %d bytes, want 0", n)
+	}
+}
+
+// The same failing write is our own deadline stopping the stream, not a defect.
+func TestCopyStreamIgnoresTheInterruptedWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	sink := &sinkStub{err: syscall.ENOSPC}
+	if _, err := copyStream(ctx, sink, io.NopCloser(bytes.NewReader(streamBytes())), time.Time{}); err != nil {
+		t.Fatalf("a deliberate stop was reported as a failure: %v", err)
+	}
+}
+
+// A read failure stays what it always was: log it and let the caller reconnect.
+func TestCopyStreamReconnectsAfterReadErrors(t *testing.T) {
+	payload := streamBytes()
+	sink := &sinkStub{}
+	body := &errorBody{data: payload, err: errors.New("unexpected EOF")}
+	n, err := copyStream(context.Background(), sink, body, time.Time{})
+	if err != nil {
+		t.Fatalf("a read error must not be returned: %v", err)
+	}
+	if n != int64(len(payload)) {
+		t.Fatalf("copyStream counted %d bytes, want %d", n, len(payload))
+	}
+	if !bytes.Equal(sink.bytes(), payload) {
+		t.Fatalf("sink holds %d bytes, want %d", len(sink.bytes()), len(payload))
 	}
 }

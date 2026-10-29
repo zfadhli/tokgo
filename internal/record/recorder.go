@@ -78,7 +78,7 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 		if err != nil {
 			return "", err
 		}
-		written, err = r.capture(ctx, f, roomID, url, deadline)
+		written, err = r.capture(ctx, &rawFile{f: f}, roomID, url, deadline)
 		if err != nil {
 			f.Close()
 			return "", err
@@ -118,7 +118,7 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 
 // capture fills f from one candidate url, reconnecting after each clean end of
 // stream until the room dies, the deadline passes, or ctx is cancelled.
-func (r *Recorder) capture(ctx context.Context, f *os.File, roomID, url string, deadline time.Time) (int64, error) {
+func (r *Recorder) capture(ctx context.Context, sink captureSink, roomID, url string, deadline time.Time) (int64, error) {
 	var written int64
 	zeroAttempts := 0
 	for {
@@ -154,7 +154,7 @@ func (r *Recorder) capture(ctx context.Context, f *os.File, roomID, url string, 
 			}
 			continue
 		}
-		n, err := copyStream(ctx, f, body, deadline)
+		n, err := copyStream(ctx, sink, body, deadline)
 		body.Close()
 		written += n
 		if err != nil {
@@ -167,10 +167,12 @@ func (r *Recorder) capture(ctx context.Context, f *os.File, roomID, url string, 
 	}
 }
 
-// copyStream moves body into f through one reusable 512 KiB buffer, stopping
-// when ctx is cancelled or the deadline passes. Cancellation closes the body,
-// which unblocks the pending read without dropping bytes already written.
-func copyStream(ctx context.Context, f io.Writer, body io.ReadCloser, deadline time.Time) (int64, error) {
+// copyStream moves body into sink through one reusable 512 KiB buffer, stopping
+// when ctx is cancelled or the deadline passes. The interrupt closes the body and
+// the sink. Closing the body alone only releases a pending read; a goroutine
+// blocked writing into a stalled ffmpeg pipe would stay blocked forever, voiding
+// both the duration cap and Ctrl-C.
+func copyStream(ctx context.Context, sink captureSink, body io.ReadCloser, deadline time.Time) (int64, error) {
 	done := make(chan struct{})
 	defer close(done)
 
@@ -184,25 +186,47 @@ func copyStream(ctx context.Context, f io.Writer, body io.ReadCloser, deadline t
 		go func() {
 			select {
 			case <-timer.C:
-				body.Close()
 			case <-done:
+				return
 			}
+			body.Close()
+			sink.Interrupt()
 		}()
 	}
 	go func() {
 		select {
 		case <-ctx.Done():
-			body.Close()
 		case <-done:
+			return
 		}
+		body.Close()
+		sink.Interrupt()
 	}()
 
-	n, err := io.CopyBuffer(f, body, make([]byte, bufferSize))
-	interrupted := ctx.Err() != nil || expired(deadline)
-	if err != nil && !interrupted && !errors.Is(err, io.EOF) {
-		logx.Warnf("stream read failed, reconnecting: %v", err)
+	buf := make([]byte, bufferSize)
+	var written int64
+	for {
+		n, readErr := body.Read(buf)
+		if n > 0 {
+			if _, err := sink.Write(buf[:n]); err != nil {
+				if interrupted(ctx, deadline) {
+					return written, nil
+				}
+				return written, &writeError{err: err}
+			}
+			written += int64(n)
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) && !interrupted(ctx, deadline) {
+				logx.Warnf("stream read failed, reconnecting: %v", readErr)
+			}
+			return written, nil
+		}
 	}
-	return n, nil
+}
+
+func interrupted(ctx context.Context, deadline time.Time) bool {
+	return ctx.Err() != nil || expired(deadline)
 }
 
 func expired(deadline time.Time) bool {
