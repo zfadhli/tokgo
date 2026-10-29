@@ -135,6 +135,8 @@ input shows what tab would fill.
 | `/add <name,...>` | save targets, and add them to a live run |
 | `/start <name\|all>` | start one saved target, or every saved target |
 | `/restart <name>` | stop one target, remux it, then start it again |
+| `/remove <name>` | take one target off the saved list, stopping it if it runs |
+| `/config` | show the settings the next run will use, cookie included as a mask |
 | `/cookies <value>` | set `sessionid_ss` and save it to `cookies.json` |
 | `/drop <user>` | stop recording one target, the others keep going; the name stays saved |
 | `/once`, `/wait` | record one session per target, or keep waiting (default) |
@@ -144,15 +146,16 @@ input shows what tab would fill.
 | `/proxy <url>` | proxy for lookups, alone clears it |
 | `/telegram on\|off` | upload each recording when it is written |
 | `/stop` | stop the run, finish the capture and remux |
-| `/quit` | leave now, without waiting for a remux |
+| `/quit` | leave now, without waiting for a remux; the only exit |
 | `/help` | print the list |
 
 Settings changes apply to the next run and say so if one is in flight; nothing is
 restarted behind your back. `/restart` is the one command that does restart
 something, and only after the old capture has been remuxed. `up`/`down` walk the
-lines you submitted before, `esc` stops a run or clears the line, and Ctrl-C
-stops and then quits. Validation goes through the same parser the flags use, so
-a command cannot accept a combination the CLI would reject.
+lines you submitted before and `esc` stops a run or clears the line. `/quit` is
+the only way out: Ctrl-C is not bound here, so a stray one cannot abandon a
+remux. Validation goes through the same parser the flags use, so a command
+cannot accept a combination the CLI would reject.
 
 Below 60 columns the size column is dropped and the table keeps the name, phase
 and timer.

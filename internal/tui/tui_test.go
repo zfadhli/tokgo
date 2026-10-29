@@ -411,7 +411,9 @@ func TestEscClearsWhenIdleAndStopsWhenRunning(t *testing.T) {
 	}
 }
 
-func TestCtrlCStopsThenQuits(t *testing.T) {
+// TestCtrlCIsNotBound pins the rule: the screen only leaves on /quit, so a
+// stray Ctrl-C cannot abandon a remux.
+func TestCtrlCIsNotBound(t *testing.T) {
 	m := newModel()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.ctrl = &fakeCtrl{}
@@ -419,19 +421,11 @@ func TestCtrlCStopsThenQuits(t *testing.T) {
 	m.ctx = ctx
 
 	_, cmd := m.Update(key("ctrl+c"))
-	if cmd != nil {
-		t.Fatal("the first ctrl+c only stops the run")
+	if cmd != nil || m.quit {
+		t.Fatal("ctrl+c must not quit")
 	}
-	if ctx.Err() == nil {
-		t.Fatal("the first ctrl+c must stop the run")
-	}
-	if !m.finishing {
-		t.Fatal("the first ctrl+c must mark the run stopping")
-	}
-
-	_, cmd = m.Update(key("ctrl+c"))
-	if !m.quit || cmd == nil {
-		t.Fatal("the second ctrl+c must quit")
+	if ctx.Err() != nil || m.finishing {
+		t.Fatal("ctrl+c must not stop the run")
 	}
 }
 
@@ -1301,7 +1295,7 @@ func TestTypingResetsTheCycle(t *testing.T) {
 
 func TestHintLine(t *testing.T) {
 	m := newModel()
-	if got := m.hintLine(); !strings.Contains(got, "ctrl+c stop") {
+	if got := m.hintLine(); !strings.Contains(got, "/quit exit") {
 		t.Fatalf("the empty input must show the key reminder, got %q", got)
 	}
 
@@ -1336,6 +1330,115 @@ func TestCompletionLeavesAnExactValueAlone(t *testing.T) {
 
 // TestRememberRefusesWhatCannotBeSaved proves a url or a room id still runs, but
 // never lands in the list.
+// TestRemoveTakesANameOffTheList proves a removed idle target disappears from
+// both the file and the table.
+func TestRemoveTakesANameOffTheList(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	submit(m, "/add alpha, beta")
+
+	submit(m, "/remove @alpha")
+	if !slices.Equal(m.list, []string{"beta"}) {
+		t.Fatalf("list = %q, want [beta]", m.list)
+	}
+	if got := loadTargets(m.userPath); !slices.Equal(got, []string{"beta"}) {
+		t.Fatalf("saved = %q, want [beta]", got)
+	}
+	if _, ok := m.byName["alpha"]; ok {
+		t.Fatalf("the row must go with the name: %q", m.byName)
+	}
+	if !slices.Equal(m.targets, []target{{user: "beta", label: "@beta", idle: true, since: m.now}}) {
+		t.Fatalf("rows = %+v, want only beta", m.targets)
+	}
+	if got := logText(m); !strings.Contains(got, "removed @alpha") {
+		t.Fatalf("activity missing the removal:\n%s", got)
+	}
+}
+
+// TestRemoveStopsARunningTarget keeps the row so the stopped capture stays
+// visible with its size.
+func TestRemoveStopsARunningTarget(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	ctrl := &fakeCtrl{}
+	m.ctrl = ctrl
+	m.list = []string{"alpha", "beta"}
+	m.syncRows()
+
+	submit(m, "/remove alpha")
+	if !slices.Equal(ctrl.dropped, []string{"alpha"}) {
+		t.Fatalf("dropped = %q, want [alpha]", ctrl.dropped)
+	}
+	if !slices.Equal(m.list, []string{"beta"}) {
+		t.Fatalf("list = %q, want [beta]", m.list)
+	}
+	if _, ok := m.byName["alpha"]; !ok {
+		t.Fatal("a running target keeps its row until it stops")
+	}
+}
+
+func TestRemoveRefusesAnUnknownName(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	submit(m, "/remove ghost")
+	if got := logText(m); !strings.Contains(got, "@ghost is not saved") {
+		t.Fatalf("activity missing the warning:\n%s", got)
+	}
+}
+
+func TestRemoveCancelsAQueuedRestart(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	m.ctrl = &fakeCtrl{}
+	submit(m, "/restart alpha")
+	if len(m.restarting) != 1 {
+		t.Fatalf("restarting = %q, want [alpha]", m.restarting)
+	}
+	submit(m, "/remove alpha")
+	if len(m.restarting) != 0 {
+		t.Fatalf("a removed target must not restart: %q", m.restarting)
+	}
+}
+
+// TestConfigShowsTheNextRun proves /config prints the settings the flags would
+// take, with the cookie masked and the output directory resolved.
+func TestConfigShowsTheNextRun(t *testing.T) {
+	m := newModel()
+	m.userPath = "/tmp/targets.txt"
+	m.list = []string{"alpha"}
+	m.cookies = map[string]string{"sessionid_ss": "abcdef1234"}
+	m.settings.duration = 12
+	m.settings.proxy = "socks5://127.0.0.1:1080"
+
+	submit(m, "/config")
+	logs := logText(m)
+	for _, want := range []string{
+		"wait for live, poll 3 min",
+		"12 min",
+		"(default)",
+		"socks5://127.0.0.1:1080",
+		"telegram   off",
+		"sessionid_ss ••••1234",
+		"1 saved · /tmp/targets.txt",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("config missing %q:\n%s", want, logs)
+		}
+	}
+	if strings.Contains(logs, "abcdef1234") {
+		t.Fatalf("the cookie must stay masked:\n%s", logs)
+	}
+	if strings.Contains(logs, "in flight") {
+		t.Fatalf("an idle screen has no run to explain:\n%s", logs)
+	}
+
+	m.ctrl = &fakeCtrl{}
+	submit(m, "/config")
+	if got := logText(m); !strings.Contains(got, "changes apply to the next run") {
+		t.Fatalf("a live run must say the settings wait:\n%s", got)
+	}
+}
+
 func TestRememberRefusesWhatCannotBeSaved(t *testing.T) {
 	m := newModel()
 	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
