@@ -80,12 +80,25 @@ cookie jar would otherwise leave the webcast API unauthenticated, which is
 exactly the endpoint a login-gated room needs. A missing file is fine; TikTok's
 login walls are then reported per request.
 
-Do not put `tt-target-idc` in there unless you know your session's datacentre
-matches it. It is a routing hint: a stale value makes TikTok answer `4003110`
-for rooms it would otherwise serve, which looks like a private room. The
-reference project ships `useast2a` in its default file and many users hit this.
-The recorder defends itself: on a `4003110` answer with that cookie present it
-retries once without it and says so in the log.
+`tt-target-idc` and `tt-target-idc-sign` are **ignored** if present. They are
+routing hints TikTok computes per session, so a value from a config file can only
+be stale. Measured against a login-gated room with a valid `sessionid_ss`:
+
+| `tt-target-idc` sent | `room/info` |
+| -------------------- | ----------- |
+| none                 | `0`, manifest present |
+| `useast2a`           | `4003110`, no manifest |
+| `useast1a`           | `0`, manifest present |
+| `useast8`            | `0`, manifest present |
+| `my2`                | `0`, manifest present |
+| `sg2`                | `0`, manifest present |
+| `eu1`                | `0`, manifest present |
+
+So the cookie is never needed, and `useast2a` — the value the reference project
+ships in its default `cookies.json` — is the one value that breaks room lookups.
+Guessing a datacentre is not worth a retry ladder: every value except that one
+behaves exactly like sending nothing. The recorder strips these cookies from
+every request and warns once when the config mentions one.
 
 Login-gated rooms are fatal in every mode: the run stops with
 `live is private, login required` and exit status 1 instead of polling a room no

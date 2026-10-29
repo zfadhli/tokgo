@@ -6,6 +6,8 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"sync"
+
+	"tokgo/internal/logx"
 )
 
 var chromeHeaders = map[string]string{
@@ -47,8 +49,12 @@ var cookieHosts = []string{"www.tiktok.com", "webcast.tiktok.com"}
 func New(proxy string, cookies map[string]string) *Client {
 	jar, _ := cookiejar.New(nil)
 	if len(cookies) > 0 {
+		warnManagedCookies(cookies)
 		batch := make([]*http.Cookie, 0, len(cookies))
 		for name, value := range cookies {
+			if isManagedCookie(name) {
+				continue
+			}
 			batch = append(batch, &http.Cookie{Name: name, Value: value})
 		}
 		for _, host := range cookieHosts {
@@ -110,36 +116,35 @@ func (c *Client) do(req *http.Request, noRedirect bool) (*http.Response, error) 
 // request. A stale value makes the webcast API answer 4003110.
 const idcCookie = "tt-target-idc"
 
-// dropCookie reports whether name was configured and stops it from being sent
-// from now on. Removing it from the jar is unreliable: a host-only cookie has no
-// domain to match a delete against, so the name is filtered out of each
-// request's Cookie header instead.
-func (c *Client) dropCookie(name string) bool {
-	origin, err := url.Parse(c.webcast + "/")
-	if err != nil {
-		return false
-	}
-	for _, cookie := range c.hc.Jar.Cookies(origin) {
-		if cookie.Name == name && !c.filter.omitted.has(name) {
-			c.filter.omitted.add(name)
+// managedCookies are routing/region hints TikTok computes per session. Sent by
+// hand they can only be wrong: measured against a login-gated room, tt-target-idc
+// = useast2a makes room/info answer 4003110 while every other value, and no
+// value at all, returns the stream manifest. They are therefore never sent,
+// whatever cookies.json says.
+var managedCookies = []string{"tt-target-idc", "tt-target-idc-sign"}
+
+func isManagedCookie(name string) bool {
+	for _, managed := range managedCookies {
+		if managed == name {
 			return true
 		}
 	}
 	return false
 }
 
-// omitSet is the shared list of cookie names withheld from outgoing requests.
+// omitSet is the list of cookie names withheld from outgoing requests.
 type omitSet struct {
 	mu    sync.RWMutex
 	names map[string]bool
 }
 
-func newOmitSet() *omitSet { return &omitSet{names: map[string]bool{}} }
-
-func (s *omitSet) add(name string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.names[name] = true
+// newOmitSet starts with every server-managed cookie already withheld.
+func newOmitSet() *omitSet {
+	set := &omitSet{names: make(map[string]bool, len(managedCookies))}
+	for _, name := range managedCookies {
+		set.names[name] = true
+	}
+	return set
 }
 
 func (s *omitSet) has(name string) bool {
@@ -154,19 +159,19 @@ func (s *omitSet) size() int {
 	return len(s.names)
 }
 
-// cookieFilter strips omitted cookie names from outgoing requests, which is the
-// only reliable way to drop a cookie the jar keeps re-attaching.
+// cookieFilter strips managed cookie names from outgoing requests, whether they
+// came from cookies.json or from the jar.
 type cookieFilter struct {
 	next    http.RoundTripper
 	omitted *omitSet
 }
 
 func (f *cookieFilter) RoundTrip(r *http.Request) (*http.Response, error) {
-	if f.omitted.size() == 0 {
+	if f.omitted.size() == 0 || len(r.Cookies()) == 0 {
 		return f.next.RoundTrip(r)
 	}
 
-	kept := r.Cookies()[:0]
+	kept := make([]*http.Cookie, 0, len(r.Cookies()))
 	for _, cookie := range r.Cookies() {
 		if !f.omitted.has(cookie.Name) {
 			kept = append(kept, cookie)
@@ -178,4 +183,14 @@ func (f *cookieFilter) RoundTrip(r *http.Request) (*http.Response, error) {
 		clone.AddCookie(cookie)
 	}
 	return f.next.RoundTrip(clone)
+}
+
+// warnManagedCookies tells the operator that a configured hint is being ignored,
+// because the failure it causes looks like a private room.
+func warnManagedCookies(cookies map[string]string) {
+	for _, name := range managedCookies {
+		if value, ok := cookies[name]; ok && value != "" {
+			logx.Warnf("ignoring %s=%s from cookies.json: TikTok computes that hint per session, and a stale value makes the room API answer 4003110", name, value)
+		}
+	}
 }

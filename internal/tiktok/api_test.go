@@ -667,59 +667,45 @@ func quoteJSON(t *testing.T, raw string) string {
 	return string(encoded)
 }
 
-// TestRoomInfoRetriesWithoutStaleIDC covers the trap that a configured
-// tt-target-idc cookie creates: TikTok answers 4003110 while that routing hint
-// disagrees with the session's datacentre, and serves the room once it is gone.
-func TestRoomInfoRetriesWithoutStaleIDC(t *testing.T) {
-	room := `{"status_code":0,"data":{"status":2,"stream_url":{"flv_pull_url":{"FULL_HD1":"https://cdn.example/full.flv"}}}}`
-	roomInfoHits := 0
-
+// TestManagedCookiesNeverSent pins the rule: hints TikTok computes per session
+// are not forwarded, whatever cookies.json or the jar says, because a stale
+// tt-target-idc makes the room API answer 4003110 for serveable rooms.
+func TestManagedCookiesNeverSent(t *testing.T) {
+	var seen string
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/webcast/room/info/" {
-			http.NotFound(w, r)
-			return
-		}
-		roomInfoHits++
-		if cookie, err := r.Cookie(idcCookie); err == nil && cookie.Value != "" {
-			writeBody(w, infoRestricted)
-			return
-		}
-		writeBody(w, room)
+		seen = r.Header.Get("Cookie")
+		writeBody(w, `{}`)
 	}))
-	c.hc.Jar.SetCookies(mustURL(t, c.webcast+"/"), []*http.Cookie{{Name: idcCookie, Value: "useast2a", Path: "/"}})
+	c.hc.Jar.SetCookies(mustURL(t, c.base+"/"), []*http.Cookie{
+		{Name: "sessionid_ss", Value: "keep-me", Path: "/"},
+		{Name: idcCookie, Value: "useast2a", Path: "/"},
+	})
 
-	got, err := c.LiveURLs(t.Context(), "7123", "creator")
+	resp, err := c.get(t.Context(), c.base+"/probe", false)
 	if err != nil {
-		t.Fatalf("LiveURLs: %v", err)
+		t.Fatalf("request: %v", err)
 	}
-	if len(got) != 1 || got[0] != "https://cdn.example/full.flv" {
-		t.Fatalf("urls = %v", got)
+	resp.Body.Close()
+
+	if !strings.Contains(seen, "sessionid_ss=keep-me") {
+		t.Errorf("session cookie was dropped from the request: %q", seen)
 	}
-	if roomInfoHits != 2 {
-		t.Fatalf("room info fetched %d times, want 2 (one refused, one retried)", roomInfoHits)
+	if strings.Contains(seen, idcCookie) {
+		t.Errorf("%s leaked onto the wire: %q", idcCookie, seen)
 	}
 }
 
-// TestRoomInfoDoesNotRetryWithoutIDC keeps the retry narrow: no stale cookie
-// means no second request.
-func TestRoomInfoDoesNotRetryWithoutIDC(t *testing.T) {
-	roomInfoHits := 0
-	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/webcast/room/info/":
-			roomInfoHits++
-			writeBody(w, infoRestricted)
-		case "/tiktok/room/api/sign":
-			w.WriteHeader(http.StatusServiceUnavailable)
-		default:
-			writeBody(w, `<html>no stream here</html>`)
+// TestManagedCookieNotLoaded covers the config path: a configured hint is
+// ignored rather than seeded into the jar.
+func TestManagedCookieNotLoaded(t *testing.T) {
+	c := New("", map[string]string{idcCookie: "useast2a", "sessionid_ss": "abc"})
+	for _, cookie := range c.hc.Jar.Cookies(mustURL(t, "https://webcast.tiktok.com/")) {
+		if cookie.Name == idcCookie {
+			t.Fatalf("%s was seeded into the jar", idcCookie)
 		}
-	}))
-	if _, err := c.LiveURLs(t.Context(), "7123", "creator"); !errors.Is(err, ErrPrivateRoom) {
-		t.Fatalf("err = %v, want ErrPrivateRoom", err)
 	}
-	if roomInfoHits != 1 {
-		t.Fatalf("room info fetched %d times, want 1", roomInfoHits)
+	if got := len(c.hc.Jar.Cookies(mustURL(t, "https://webcast.tiktok.com/"))); got != 1 {
+		t.Fatalf("jar holds %d cookies, want only the session cookie", got)
 	}
 }
 

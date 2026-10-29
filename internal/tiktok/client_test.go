@@ -232,20 +232,16 @@ func TestOpenStream(t *testing.T) {
 	}
 }
 
-// TestBrowserSharesDroppedCookies proves the two clients share one omit set: the
-// recorder's stream client must not re-learn that a cookie has to go, which
-// would cost one wasted request per recording.
-func TestBrowserSharesDroppedCookies(t *testing.T) {
-	c := New("", map[string]string{idcCookie: "useast2a"})
+// TestBrowserSharesOmitSet proves the two clients agree on which cookies are
+// withheld: the recorder's stream client must not start re-sending a hint that
+// the lookup client already refuses.
+func TestBrowserSharesOmitSet(t *testing.T) {
+	c := New("", nil)
 	b := c.Browser()
-
-	if !c.dropCookie(idcCookie) {
-		t.Fatal("first drop should report the cookie as configured")
-	}
-	if c.dropCookie(idcCookie) {
-		t.Error("second drop should report nothing left to remove")
+	if b.filter.omitted != c.filter.omitted {
+		t.Error("the browser client must share the omit set")
 	}
 	if !b.filter.omitted.has(idcCookie) {
-		t.Error("the browser client must share the omit set")
+		t.Errorf("%s should be withheld by default", idcCookie)
 	}
 }
