@@ -4,6 +4,7 @@ package record
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -48,6 +49,39 @@ func New(api API, opts Options) *Recorder {
 	return &Recorder{api: api, opts: opts}
 }
 
+// session owns one recording's capture segments. Every stream connection gets
+// its own, because a reconnect repeats the stream timestamps: appending its
+// bytes into the first file makes ffmpeg drop that connection's video.
+type session struct {
+	ffmpegPath string
+	base       string
+	raw        bool // the muxer could not start, so captures go straight to .flv
+	next       int
+	segments   []string
+}
+
+// open starts the sink for the next connection, falling back to a raw file when
+// the muxer cannot start. A broken ffmpeg must not cost a single CDN byte.
+func (s *session) open() (captureSink, string, error) {
+	if !s.raw {
+		segment := fmt.Sprintf("%s.%03d.ts", s.base, s.next)
+		m, err := startMuxer(s.ffmpegPath, segment)
+		if err == nil {
+			s.next++
+			return m, segment, nil
+		}
+		logx.Warnf("live muxer unavailable, capturing raw instead: %v", err)
+		s.raw = true
+	}
+	segment := fmt.Sprintf("%s.%03d.flv", s.base, s.next)
+	f, err := os.Create(segment)
+	if err != nil {
+		return nil, "", err
+	}
+	s.next++
+	return &rawFile{f: f}, segment, nil
+}
+
 // Record captures one live session and returns the final mp4 path.
 func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, error) {
 	start := time.Now()
@@ -59,48 +93,42 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 		return "", tiktok.ErrLiveURL
 	}
 
-	out := filepath.Join(r.opts.OutputDir, "TK_"+user+"_"+start.Format("2006.01.02_15-04-05")+".000.flv")
+	sess := &session{
+		ffmpegPath: r.opts.FFmpegPath,
+		base:       filepath.Join(r.opts.OutputDir, "TK_"+user+"_"+start.Format("2006.01.02_15-04-05")),
+	}
 	var deadline time.Time
 	if r.opts.Duration > 0 {
 		deadline = start.Add(time.Duration(r.opts.Duration) * time.Second)
 	}
-	logx.Infof("recording %s to %s", user, out)
+	logx.Infof("recording %s to %s", user, sess.base)
 
-	var (
-		file    *os.File
-		written int64
-	)
 	for i, url := range urls {
 		if expired(deadline) {
 			break
 		}
-		f, err := os.Create(out)
+		written, err := r.capture(ctx, sess, roomID, url, deadline)
 		if err != nil {
-			return "", err
-		}
-		written, err = r.capture(ctx, &rawFile{f: f}, roomID, url, deadline)
-		if err != nil {
-			f.Close()
-			return "", err
+			var writeErr *writeError
+			if !errors.As(err, &writeErr) {
+				return "", err
+			}
+			logx.Errorf("capture write failed, remuxing the segments already on disk: %v", writeErr)
+			break
 		}
 		if written >= minStreamBytes || (written > 0 && ctx.Err() != nil) {
-			file = f
 			break
 		}
 		logx.Warnf("live stream url %d/%d delivered %d bytes, trying the next one", i+1, len(urls), written)
-		f.Close()
 	}
-	if file == nil {
-		os.Remove(out)
+	if len(sess.segments) == 0 {
 		return "", tiktok.ErrLiveURL
 	}
-	if err := file.Close(); err != nil {
-		return "", err
-	}
 
-	path, err := filepath.Abs(out)
+	last := sess.segments[len(sess.segments)-1]
+	path, err := filepath.Abs(last)
 	if err != nil {
-		path = out
+		path = last
 	}
 	logx.Infof("recording finished: %s", path)
 
@@ -108,17 +136,16 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 	// is the normal way a recording ends, so ffmpeg gets its own budget.
 	convertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), convertTimeout)
 	defer cancel()
-	converted, err := Convert(convertCtx, []string{out}, r.opts.Bitrate, r.opts.FFmpegPath)
+	converted, err := Convert(convertCtx, sess.segments, r.opts.Bitrate, r.opts.FFmpegPath)
 	if err != nil {
 		logx.Errorf("conversion failed, keeping the raw capture: %v", err)
-		return out, nil
 	}
 	return converted, nil
 }
 
-// capture fills f from one candidate url, reconnecting after each clean end of
-// stream until the room dies, the deadline passes, or ctx is cancelled.
-func (r *Recorder) capture(ctx context.Context, sink captureSink, roomID, url string, deadline time.Time) (int64, error) {
+// capture fills a segment from one candidate url, reconnecting after each clean
+// end of stream until the room dies, the deadline passes, or ctx is cancelled.
+func (r *Recorder) capture(ctx context.Context, sess *session, roomID, url string, deadline time.Time) (int64, error) {
 	var written int64
 	zeroAttempts := 0
 	for {
@@ -154,11 +181,34 @@ func (r *Recorder) capture(ctx context.Context, sink captureSink, roomID, url st
 			}
 			continue
 		}
-		n, err := copyStream(ctx, sink, body, deadline)
+
+		sink, segment, err := sess.open()
+		if err != nil {
+			body.Close()
+			return written, err
+		}
+		n, writeErr := copyStream(ctx, sink, body, deadline)
 		body.Close()
 		written += n
-		if err != nil {
-			return written, err
+		exitErr := sink.Finish()
+		if n > 0 {
+			sess.segments = append(sess.segments, segment)
+		} else {
+			os.Remove(segment)
+		}
+		switch {
+		case exitErr == nil:
+		case interrupted(ctx, deadline):
+			// Cutting stdin mid-tag makes ffmpeg report a truncated packet on
+			// every clean stop. Keep the stderr for post-mortems, not the console.
+			logx.Debugf("muxer for %s stopped mid-tag: %v", segment, exitErr)
+		case n > 0:
+			logx.Warnf("muxer for %s exited with an error, keeping its %d bytes: %v", segment, n, exitErr)
+		default:
+			logx.Warnf("capture of %s produced nothing: %v", segment, exitErr)
+		}
+		if writeErr != nil {
+			return written, writeErr
 		}
 		if n == 0 {
 			return written, nil

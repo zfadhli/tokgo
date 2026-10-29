@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"tokgo/internal/logx"
 	"tokgo/internal/tiktok"
 )
 
@@ -90,6 +91,10 @@ func (b *stalledBody) Close() error {
 
 func streamBytes() []byte { return bytes.Repeat([]byte("tokgo-live-chunk"), 512) }
 
+// runsOnce answers the liveness check for a single connection, then reports the
+// room dead so the capture stops without a deadline or a cancel.
+func runsOnce(call int) (bool, error) { return call <= 1, nil }
+
 func TestRecordCapturesUntilDurationCap(t *testing.T) {
 	payload := streamBytes()
 	api := &fakeAPI{
@@ -98,7 +103,9 @@ func TestRecordCapturesUntilDurationCap(t *testing.T) {
 			return newStalledBody(payload), nil
 		},
 	}
-	rec := New(api, Options{OutputDir: t.TempDir(), Duration: 1, FFmpegPath: copyStub(t, "cp \"$3\" \"$last\"")})
+	stub, _ := ffmpegStub(t, "")
+	dir := t.TempDir()
+	rec := New(api, Options{OutputDir: dir, Duration: 1, FFmpegPath: stub})
 
 	start := time.Now()
 	path, err := collect(t, rec, context.Background())
@@ -108,7 +115,7 @@ func TestRecordCapturesUntilDurationCap(t *testing.T) {
 	if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 5*time.Second {
 		t.Fatalf("recording stopped after %v, want about 1s (duration cap)", elapsed)
 	}
-	if !strings.HasSuffix(path, ".mp4") || strings.HasSuffix(path, "_flv.mp4") {
+	if !strings.HasSuffix(path, ".mp4") {
 		t.Fatalf("Record returned %q, want the converted path", path)
 	}
 	got, err := os.ReadFile(path)
@@ -118,6 +125,7 @@ func TestRecordCapturesUntilDurationCap(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("file holds %d bytes, want %d", len(got), len(payload))
 	}
+	assertOnlyRecording(t, dir, path)
 }
 
 func TestRecordFallsThroughEmptyCandidate(t *testing.T) {
@@ -132,7 +140,9 @@ func TestRecordFallsThroughEmptyCandidate(t *testing.T) {
 			return io.NopCloser(bytes.NewReader(payload)), nil
 		},
 	}
-	rec := New(api, Options{OutputDir: t.TempDir(), FFmpegPath: copyStub(t, "cp \"$3\" \"$last\"")})
+	stub, _ := ffmpegStub(t, "")
+	dir := t.TempDir()
+	rec := New(api, Options{OutputDir: dir, FFmpegPath: stub})
 
 	path, err := collect(t, rec, context.Background())
 	if err != nil {
@@ -148,6 +158,7 @@ func TestRecordFallsThroughEmptyCandidate(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("file holds %d bytes, want the second stream's %d", len(got), len(payload))
 	}
+	assertOnlyRecording(t, dir, path)
 }
 
 func TestRecordAllCandidatesEmpty(t *testing.T) {
@@ -158,7 +169,8 @@ func TestRecordAllCandidatesEmpty(t *testing.T) {
 			return io.NopCloser(bytes.NewReader(nil)), nil
 		},
 	}
-	rec := New(api, Options{OutputDir: dir, FFmpegPath: copyStub(t, "cp \"$3\" \"$last\"")})
+	stub, _ := ffmpegStub(t, "")
+	rec := New(api, Options{OutputDir: dir, FFmpegPath: stub})
 
 	path, err := collect(t, rec, context.Background())
 	if !errors.Is(err, tiktok.ErrLiveURL) {
@@ -167,13 +179,7 @@ func TestRecordAllCandidatesEmpty(t *testing.T) {
 	if path != "" {
 		t.Fatalf("Record returned path %q for a failed capture", path)
 	}
-	leftovers, err := filepath.Glob(filepath.Join(dir, "TK_*"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(leftovers) != 0 {
-		t.Fatalf("failed capture left %v behind", leftovers)
-	}
+	assertOnlyRecording(t, dir, "")
 }
 
 func TestRecordCancellationKeepsCapture(t *testing.T) {
@@ -183,7 +189,9 @@ func TestRecordCancellationKeepsCapture(t *testing.T) {
 		urls: []string{"url-a"},
 		open: func(context.Context, string) (io.ReadCloser, error) { return body, nil },
 	}
-	rec := New(api, Options{OutputDir: t.TempDir(), FFmpegPath: copyStub(t, "cp \"$3\" \"$last\"")})
+	stub, _ := ffmpegStub(t, "")
+	dir := t.TempDir()
+	rec := New(api, Options{OutputDir: dir, FFmpegPath: stub})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -203,6 +211,224 @@ func TestRecordCancellationKeepsCapture(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("file holds %d bytes, want the buffered %d", len(got), len(payload))
 	}
+	assertOnlyRecording(t, dir, path)
+}
+
+// A reconnect repeats the stream timestamps, so its bytes get their own segment
+// and the remux joins the two. Appending into one file loses that video.
+func TestRecordReconnectWritesOneSegmentPerConnection(t *testing.T) {
+	payload := streamBytes()
+	api := &fakeAPI{
+		urls:  []string{"url-a"},
+		alive: func(call int) (bool, error) { return call <= 2, nil },
+		open: func(context.Context, string) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(payload)), nil
+		},
+	}
+	stub, calls := ffmpegStub(t, "")
+	dir := t.TempDir()
+	rec := New(api, Options{OutputDir: dir, FFmpegPath: stub})
+
+	path, err := collect(t, rec, context.Background())
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := append(append([]byte(nil), payload...), payload...); !bytes.Equal(got, want) {
+		t.Fatalf("file holds %d bytes, want both connections' %d", len(got), len(want))
+	}
+	invocations := stubCalls(t, calls)
+	if len(invocations) != 3 {
+		t.Fatalf("ffmpeg calls = %q, want two muxers and one convert", invocations)
+	}
+	if !strings.Contains(invocations[0], "pipe:0") || !strings.Contains(invocations[0], ".000.ts") {
+		t.Fatalf("first call = %q, want the first segment", invocations[0])
+	}
+	if !strings.Contains(invocations[1], "pipe:0") || !strings.Contains(invocations[1], ".001.ts") {
+		t.Fatalf("second call = %q, want a second segment", invocations[1])
+	}
+	if !strings.Contains(invocations[2], "-f concat") {
+		t.Fatalf("third call = %q, want the concat remux", invocations[2])
+	}
+	assertOnlyRecording(t, dir, path)
+}
+
+// A broken ffmpeg must not cost a single byte: the capture goes straight to a
+// .flv segment and the run keeps it when the remux cannot run either.
+func TestRecordFallsBackToRawCaptureWhenMuxerFails(t *testing.T) {
+	payload := streamBytes()
+	api := &fakeAPI{
+		urls:  []string{"url-a"},
+		alive: runsOnce,
+		open: func(context.Context, string) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(payload)), nil
+		},
+	}
+	logs := captureLogs(t)
+	dir := t.TempDir()
+	rec := New(api, Options{OutputDir: dir, FFmpegPath: filepath.Join(t.TempDir(), "no-such-ffmpeg")})
+
+	path, err := collect(t, rec, context.Background())
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if !strings.HasSuffix(path, ".flv") {
+		t.Fatalf("Record returned %q, want the raw .flv capture", path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("file holds %d bytes, want every byte the CDN sent (%d)", len(got), len(payload))
+	}
+	assertOnlyRecording(t, dir, path)
+	if warned := countLogs(logs(), "muxer unavailable"); warned != 1 {
+		t.Fatalf("warned %d times about the muxer, want exactly one: %q", warned, logs())
+	}
+}
+
+// ffmpeg exits non-zero when stdin is cut mid-tag. The segment it wrote is still
+// good, so the recording is remuxed and kept.
+func TestRecordKeepsSegmentFromMuxerThatExitsBadly(t *testing.T) {
+	payload := streamBytes()
+	api := &fakeAPI{
+		urls:  []string{"url-a"},
+		alive: runsOnce,
+		open: func(context.Context, string) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(payload)), nil
+		},
+	}
+	stub, calls := ffmpegStub(t, `if [ "$in" = "pipe:0" ]; then
+	cat > /dev/null
+	printf 'partial-ts' > "$last"
+	exit 1
+fi
+cp "$in" "$last"`)
+	dir := t.TempDir()
+	rec := New(api, Options{OutputDir: dir, FFmpegPath: stub})
+
+	path, err := collect(t, rec, context.Background())
+	if err != nil {
+		t.Fatalf("a non-zero muxer exit must not fail the recording: %v", err)
+	}
+	if !strings.HasSuffix(path, ".mp4") {
+		t.Fatalf("Record returned %q, want the converted path", path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "partial-ts" {
+		t.Fatalf("file holds %q, want the partial segment's bytes", got)
+	}
+	if invocations := stubCalls(t, calls); len(invocations) != 2 {
+		t.Fatalf("ffmpeg calls = %q, want one mux and exactly one convert", invocations)
+	}
+	assertOnlyRecording(t, dir, path)
+}
+
+// The same non-zero exit on a capture we stopped on purpose is expected noise:
+// no failure, no error log, and the mp4 still comes out.
+func TestRecordQuietAboutMuxerExitOnDeliberateStop(t *testing.T) {
+	payload := streamBytes()
+	body := newStalledBody(payload)
+	api := &fakeAPI{
+		urls: []string{"url-a"},
+		open: func(context.Context, string) (io.ReadCloser, error) { return body, nil },
+	}
+	stub, _ := ffmpegStub(t, `if [ "$in" = "pipe:0" ]; then
+	cat > /dev/null
+	printf 'partial-ts' > "$last"
+	exit 1
+fi
+cp "$in" "$last"`)
+	dir := t.TempDir()
+	logs := captureLogs(t)
+	rec := New(api, Options{OutputDir: dir, FFmpegPath: stub})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-body.blocked
+		cancel()
+	}()
+
+	path, err := collect(t, rec, ctx)
+	if err != nil {
+		t.Fatalf("cancellation must not fail the recording: %v", err)
+	}
+	if !strings.HasSuffix(path, ".mp4") {
+		t.Fatalf("Record returned %q, want the converted path", path)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "partial-ts" {
+		t.Fatalf("file = %q, %v, want the partial segment's bytes", got, err)
+	}
+	for _, line := range logs() {
+		if strings.HasPrefix(line, "ERROR") {
+			t.Fatalf("a deliberate stop logged an error: %q", line)
+		}
+		if strings.HasPrefix(line, "WARN") && strings.Contains(line, "muxer") {
+			t.Fatalf("a deliberate stop warned about the muxer: %q", line)
+		}
+	}
+}
+
+// assertOnlyRecording fails when the output directory holds anything but the
+// returned recording, so no abandoned segment or concat list can hide there.
+func assertOnlyRecording(t *testing.T, dir, path string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 0
+	if path != "" {
+		want = 1
+	}
+	if len(entries) != want {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("output directory holds %v, want %d file(s)", names, want)
+	}
+	if path != "" && entries[0].Name() != filepath.Base(path) {
+		t.Fatalf("output directory holds %q, want %q", entries[0].Name(), filepath.Base(path))
+	}
+}
+
+// captureLogs diverts the process logger into a slice for the test's duration.
+func captureLogs(t *testing.T) func() []string {
+	t.Helper()
+	var (
+		mu    sync.Mutex
+		lines []string
+	)
+	logx.SetSink(func(level, text string) {
+		mu.Lock()
+		lines = append(lines, level+" "+text)
+		mu.Unlock()
+	})
+	t.Cleanup(func() { logx.SetSink(nil) })
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), lines...)
+	}
+}
+
+func countLogs(lines []string, substr string) int {
+	n := 0
+	for _, line := range lines {
+		if strings.Contains(line, substr) {
+			n++
+		}
+	}
+	return n
 }
 
 // collect runs Record with a watchdog so a broken stop condition fails instead
