@@ -27,8 +27,8 @@ go build -o tokgo .
 | `-user <NAMES>`, `-u` | Username(s), comma separated, `@` optional |
 | `-room_id <ID>` | Numeric room id, bypasses username resolution |
 | `-once` | Record a single attempt instead of waiting for the account to go live |
-| `-automatic_interval <MIN>` | Minutes between liveness polls (default 5, minimum 1) |
-| `-duration <SECONDS>` | Stop after this many seconds per session |
+| `-automatic_interval <MIN>` | Minutes between liveness polls (default 3, minimum 1) |
+| `-duration <MINUTES>` | Stop after this many minutes per session, 0 for no cap |
 | `-output <DIR>`, `-o` | Output directory |
 | `-proxy <URL>` | HTTP proxy for lookups; the video transfer always goes direct |
 | `-telegram` | Upload the finished file to Telegram |

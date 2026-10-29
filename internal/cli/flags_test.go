@@ -26,32 +26,32 @@ func TestParse(t *testing.T) {
 		{
 			name: "minimal user strips at",
 			args: []string{"-user", "@name"},
-			want: want(config.Config{User: "@name", AutomaticInterval: 5}, []string{"name"}, true),
+			want: want(config.Config{User: "@name", AutomaticInterval: 3}, []string{"name"}, true),
 		},
 		{
 			name: "double dash long flag accepted",
 			args: []string{"--user", "@name"},
-			want: want(config.Config{User: "@name", AutomaticInterval: 5}, []string{"name"}, true),
+			want: want(config.Config{User: "@name", AutomaticInterval: 3}, []string{"name"}, true),
 		},
 		{
 			name: "single dash long flag with value accepted",
 			args: []string{"-user=@name"},
-			want: want(config.Config{User: "@name", AutomaticInterval: 5}, []string{"name"}, true),
+			want: want(config.Config{User: "@name", AutomaticInterval: 3}, []string{"name"}, true),
 		},
 		{
 			name: "shorthand user",
 			args: []string{"-u", "@name"},
-			want: want(config.Config{User: "@name", AutomaticInterval: 5}, []string{"name"}, true),
+			want: want(config.Config{User: "@name", AutomaticInterval: 3}, []string{"name"}, true),
 		},
 		{
 			name: "shorthand output",
 			args: []string{"-u", "name", "-o", "/tmp/out"},
-			want: want(config.Config{User: "name", AutomaticInterval: 5, OutputDir: "/tmp/out"}, []string{"name"}, true),
+			want: want(config.Config{User: "name", AutomaticInterval: 3, OutputDir: "/tmp/out"}, []string{"name"}, true),
 		},
 		{
 			name: "multiple users split and cleaned",
 			args: []string{"-user", "a,b , @c"},
-			want: want(config.Config{User: "a,b , @c", AutomaticInterval: 5}, []string{"a", "b", "c"}, true),
+			want: want(config.Config{User: "a,b , @c", AutomaticInterval: 3}, []string{"a", "b", "c"}, true),
 		},
 		{
 			name:    "multiple users with url rejected",
@@ -81,12 +81,12 @@ func TestParse(t *testing.T) {
 		{
 			name: "www url accepted",
 			args: []string{"-url", liveURL},
-			want: want(config.Config{URL: liveURL, AutomaticInterval: 5}, nil, true),
+			want: want(config.Config{URL: liveURL, AutomaticInterval: 3}, nil, true),
 		},
 		{
 			name: "vm url accepted",
 			args: []string{"-url", "https://vm.tiktok.com/abc"},
-			want: want(config.Config{URL: "https://vm.tiktok.com/abc", AutomaticInterval: 5}, nil, true),
+			want: want(config.Config{URL: "https://vm.tiktok.com/abc", AutomaticInterval: 3}, nil, true),
 		},
 		{
 			name:    "non tiktok url rejected",
@@ -106,7 +106,7 @@ func TestParse(t *testing.T) {
 		{
 			name: "room id accepted",
 			args: []string{"-room_id", "123"},
-			want: want(config.Config{RoomID: "123", AutomaticInterval: 5}, nil, true),
+			want: want(config.Config{RoomID: "123", AutomaticInterval: 3}, nil, true),
 		},
 		{
 			name:    "automatic interval zero rejected",
@@ -116,7 +116,7 @@ func TestParse(t *testing.T) {
 		{
 			name: "duration accepted",
 			args: []string{"-user", "x", "-duration", "30"},
-			want: want(config.Config{User: "x", AutomaticInterval: 5, Duration: 30}, []string{"x"}, true),
+			want: want(config.Config{User: "x", AutomaticInterval: 3, Duration: 30}, []string{"x"}, true),
 		},
 		{
 			name:    "negative duration rejected",
@@ -126,7 +126,7 @@ func TestParse(t *testing.T) {
 		{
 			name: "no update check accepted",
 			args: []string{"-user", "x", "-no-update-check"},
-			want: want(config.Config{User: "x", AutomaticInterval: 5}, []string{"x"}, false),
+			want: want(config.Config{User: "x", AutomaticInterval: 3}, []string{"x"}, false),
 		},
 		{
 			name: "record once",
@@ -137,7 +137,7 @@ func TestParse(t *testing.T) {
 			name: "passthrough flags",
 			args: []string{"-user", "x", "-telegram", "-ffmpeg-path", "/usr/bin/ffmpeg", "-proxy", "http://p:1", "-output", "/tmp/out"},
 			want: want(config.Config{
-				User: "x", AutomaticInterval: 5, OutputDir: "/tmp/out",
+				User: "x", AutomaticInterval: 3, OutputDir: "/tmp/out",
 				FFmpegPath: "/usr/bin/ffmpeg", Proxy: "http://p:1", UploadTelegram: true,
 			}, []string{"x"}, true),
 		},

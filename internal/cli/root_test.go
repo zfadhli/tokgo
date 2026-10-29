@@ -55,7 +55,7 @@ func TestHelpListsEveryFlag(t *testing.T) {
 			t.Errorf("help missing --%s:\n%s", name, help)
 		}
 	}
-	for _, phrase := range []string{"comma-separated", "seconds", "minutes", "tui"} {
+	for _, phrase := range []string{"comma-separated", "minutes", "tui"} {
 		if !strings.Contains(help, phrase) {
 			t.Errorf("help missing %q:\n%s", phrase, help)
 		}

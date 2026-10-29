@@ -103,7 +103,7 @@ func New(version string, uploads telegram.Config, cookies map[string]string, in 
 	}
 	hints := [4]string{
 		"@user, tiktok.com url or room id",
-		"0",
+		"minutes, 0 = no cap",
 		"current directory",
 		"optional, lookups only",
 	}
@@ -329,7 +329,7 @@ func (m *Model) start() tea.Cmd {
 	m.screen = screenRunning
 	m.started = time.Now()
 	m.now = m.started
-	m.capSecs = cfg.Duration
+	m.capSecs = cfg.Duration * 60
 	m.logs = nil
 	m.result = nil
 	m.finishing = false

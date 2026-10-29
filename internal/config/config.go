@@ -8,7 +8,7 @@ type Config struct {
 	RoomID            string
 	Once              bool // record a single attempt instead of waiting for the account to go live
 	AutomaticInterval int  // minutes between liveness polls
-	Duration          int  // seconds; 0 means no cap
+	Duration          int  // minutes; 0 means no cap
 	OutputDir         string
 	FFmpegPath        string
 	Proxy             string

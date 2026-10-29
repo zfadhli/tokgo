@@ -41,7 +41,7 @@ func New(cfg config.Config, uploads telegram.Config) *Runner {
 		stream: stream,
 		rec: record.New(stream, record.Options{
 			OutputDir:  cfg.OutputDir,
-			Duration:   cfg.Duration,
+			Duration:   cfg.Duration * 60,
 			FFmpegPath: cfg.FFmpegPath,
 		}),
 		uploads: uploads,
