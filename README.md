@@ -1,9 +1,8 @@
 # tokgo
 
-Records TikTok live streams to mp4. A clean-room Go implementation of the CLI
-surface of an earlier Python implementation:
-the reference flags, no Python runtime, plus an interactive `tokgo tui` front
-end. It waits for an account to go live and keeps watching; `-once` records a
+Records TikTok live streams to mp4. A clean-room Go rewrite of the same CLI
+surface: the reference flags, no Python runtime, plus an interactive `tokgo tui`
+front end. It waits for an account to go live and keeps watching; `-once` records a
 single attempt instead.
 
 ```
