@@ -30,7 +30,7 @@ written. Press it twice to abort immediately and keep the raw `.ts` segments.
 ## What a run looks like
 
 ```text
-tokgo v0.1.1 — TikTok LIVE recorder
+tokgo v0.1.2 — TikTok LIVE recorder
 https://github.com/zfadhli/tokgo · MIT License
 
   target  @skynews · record once

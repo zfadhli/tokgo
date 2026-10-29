@@ -18,7 +18,7 @@
     <text class="mono" x="56" y="72" font-size="17" letter-spacing="3.2" fill="#25f4ee">TIKTOK LIVE → MP4</text>
 
     <text class="mono" x="56" y="188" font-size="100" font-weight="700" fill="#e6e8eb">tokgo</text>
-    <text class="mono" x="378" y="188" font-size="20" fill="#8a909a">v0.1.1</text>
+    <text class="mono" x="378" y="188" font-size="20" fill="#8a909a">v0.1.2</text>
 
     <text class="sans" x="56" y="244" font-size="27" fill="#e6e8eb">Waits for the stream,</text>
     <text class="sans" x="56" y="282" font-size="27" fill="#e6e8eb">records it, remuxes to mp4.</text>
