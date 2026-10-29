@@ -59,7 +59,7 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 		return "", tiktok.ErrLiveURL
 	}
 
-	out := filepath.Join(r.opts.OutputDir, "TK_"+user+"_"+start.Format("2006.01.02_15-04-05")+"_flv.mp4")
+	out := filepath.Join(r.opts.OutputDir, "TK_"+user+"_"+start.Format("2006.01.02_15-04-05")+".000.flv")
 	var deadline time.Time
 	if r.opts.Duration > 0 {
 		deadline = start.Add(time.Duration(r.opts.Duration) * time.Second)
@@ -108,7 +108,7 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 	// is the normal way a recording ends, so ffmpeg gets its own budget.
 	convertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), convertTimeout)
 	defer cancel()
-	converted, err := Convert(convertCtx, out, r.opts.Bitrate, r.opts.FFmpegPath)
+	converted, err := Convert(convertCtx, []string{out}, r.opts.Bitrate, r.opts.FFmpegPath)
 	if err != nil {
 		logx.Errorf("conversion failed, keeping the raw capture: %v", err)
 		return out, nil
