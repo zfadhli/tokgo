@@ -1,0 +1,71 @@
+{
+  "nextId": 7,
+  "tasks": [
+    {
+      "id": "1",
+      "subject": "Blocking first steps: settle the intermediate container shape",
+      "description": "Gate before any code: decide FLV-renamed vs live ffmpeg pipe to TS vs HLS byte-copy. Evidence in hand: FLV magic is `FLV\\x01\\x05`; killed-mid-write TS probes as mpegts duration 4.379s with both codecs and remuxes to a clean 4.16s mp4; truncated FLV reports duration 0.000000. Architect design pass running (agent a88a921d). Design decision recorded in .crew/spec.md.</description>\n<parameter name=\"activeForm\">Settling the intermediate container shape",
+      "status": "completed",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793256962315,
+      "updatedAt": 1793257081569
+    },
+    {
+      "id": "2",
+      "subject": "Independent workstreams: n/a, single package change",
+      "description": "n/a: the change is confined to internal/record (recorder.go, ffmpeg.go) plus their tests. internal/app only logs the final path and needs no edit; internal/tui reads the path from app. No disjoint files to parallelize.</description>\n<parameter name=\"activeForm\">Checking workstream boundaries",
+      "status": "pending",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793256962316,
+      "updatedAt": 1793256962316
+    },
+    {
+      "id": "3",
+      "subject": "Shared mutable state: n/a, no fan-out in the record path",
+      "description": "n/a: one goroutine owns the capture file/stdin per session. Multi-user fan-out in internal/app spawns independent Recorders with no shared state beyond the logger. Nothing to separate or serialize.</description>\n<parameter name=\"activeForm\">Checking shared state",
+      "status": "pending",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793256962316,
+      "updatedAt": 1793256962316
+    },
+    {
+      "id": "4",
+      "subject": "Smallest safe decomposition: one owner for the whole capture path",
+      "description": "One worker owns it: the ffmpeg lifecycle, the stdin-close cancellation contract, and the Convert rename are one interlocking contract — splitting them across agents would leave the cancel semantics unverified in each half. Single owner, reviewed diff.</description>\n<parameter name=\"activeForm\">Choosing the decomposition",
+      "status": "pending",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793256962320,
+      "updatedAt": 1793256962320
+    },
+    {
+      "id": "5",
+      "subject": "Implement TS intermediate + remux, delegated to one owner",
+      "description": "Implement: capture goes through ffmpeg to a .ts intermediate; remux .ts -> .mp4 at end or on cancel. Must cover: stdin-close unblocks a stalled write (body.Close alone does not), EPIPE mid-capture is not fatal (TS on disk stays valid), ffmpeg failing to start falls back to raw capture so data is never lost, per-candidate ffmpeg restart, Convert renamed from _flv.mp4 to .ts. Files: internal/record/recorder.go, internal/record/ffmpeg.go, plus recorder_test.go/ffmpeg_test.go.</description>\n<parameter name=\"activeForm\">Implementing the TS capture path",
+      "status": "in_progress",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793256967315,
+      "updatedAt": 1793257081570
+    },
+    {
+      "id": "6",
+      "subject": "Verify live: clean mp4 at end, playable ts on kill",
+      "description": "Verify on the real surface: go build/vet/test -race green, then a live 5s capture with tmux Ctrl-C mid-run producing a playable .mp4 (ffprobe duration, both streams), plus a SIGKILL mid-capture leaving a playable .ts. Wrong-surface or inconclusive is not a pass.</description>\n<parameter name=\"activeForm\">Verifying live capture and cancel paths",
+      "status": "pending",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793256967316,
+      "updatedAt": 1793256967316
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "nextId": 8,
+  "tasks": [
+    {
+      "id": "1",
+      "subject": "Read poteto-mode Principles section in full",
+      "description": "Read /home/envs4/workspaces/pi-poteto/skills/poteto-mode/SKILL.md Principles section and the leaf skills for any principle applied.",
+      "status": "completed",
+      "activeForm": "Reading poteto principles",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793257969455,
+      "updatedAt": 1793258023265
+    },
+    {
+      "id": "2",
+      "subject": "Reproduce: write failing test for junk segment",
+      "description": "Add the stub-based test in internal/record/recorder_test.go per brief: candidate 1 sub-threshold then EOF, candidate 2 normal payload; assert mp4 path, bytes == candidate 2 payload only, no leftover TK_*.000.*. Watch it fail on current code.",
+      "status": "completed",
+      "activeForm": "Writing failing test",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793257969455,
+      "updatedAt": 1793258051464
+    },
+    {
+      "id": "3",
+      "subject": "Confirm mechanism from recorder.go/ffmpeg.go",
+      "description": "Read Record, capture, session, Convert, concatList. Confirm sub-threshold candidate appends segment to sess.segments which Convert feeds to the concat demuxer.",
+      "status": "completed",
+      "activeForm": "Confirming root cause",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793257969456,
+      "updatedAt": 1793258023267
+    },
+    {
+      "id": "4",
+      "subject": "Plan fix",
+      "description": "Fix stays inside Record's candidate loop (no function boundary crossing). Record segment count before capture, truncate + os.Remove on the sub-threshold fall-through only.",
+      "status": "completed",
+      "activeForm": "Planning fix",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793257969460,
+      "updatedAt": 1793258093343
+    },
+    {
+      "id": "5",
+      "subject": "skip: delegate implementation",
+      "description": "skip: this agent is the scoped implementation subagent; delegating again adds a hop with no independence gain.",
+      "status": "completed",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793257969461,
+      "updatedAt": 1793258103292
+    },
+    {
+      "id": "6",
+      "subject": "Verify build, vet, race tests",
+      "description": "go build ./... && go vet ./... && go test -race ./internal/record/ && go test -race ./...",
+      "status": "completed",
+      "activeForm": "Verifying",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793257969462,
+      "updatedAt": 1793258093344
+    },
+    {
+      "id": "7",
+      "subject": "Commit failing-test-then-fix in order",
+      "description": "Two commits: failing test first, then fix. Conventional commit messages. No push.",
+      "status": "completed",
+      "activeForm": "Committing",
+      "metadata": {},
+      "blocks": [],
+      "blockedBy": [],
+      "createdAt": 1793257969462,
+      "updatedAt": 1793258103291
+    }
+  ]
+}

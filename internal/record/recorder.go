@@ -135,12 +135,9 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 		return "", tiktok.ErrLiveURL
 	}
 
-	last := sess.segments[len(sess.segments)-1]
-	path, err := filepath.Abs(last)
-	if err != nil {
-		path = last
-	}
-	logx.Infof("recording finished: %s", path)
+	// Name the count, not a segment path: the segment is removed once the mp4
+	// exists, so printing it would point at a file that no longer is there.
+	logx.Infof("recording finished: %d segment(s) captured", len(sess.segments))
 
 	// The remux must survive the cancellation that stopped the capture: Ctrl-C
 	// is the normal way a recording ends, so ffmpeg gets its own budget.
