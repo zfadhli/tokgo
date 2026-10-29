@@ -21,6 +21,7 @@ const (
 	maxZeroAttempts = 5
 	retryDelay      = 2 * time.Second
 	convertTimeout  = 30 * time.Minute
+	reportEvery     = 1 << 20
 )
 
 // API is the slice of the TikTok client a recording needs. Declared here, on
@@ -31,11 +32,31 @@ type API interface {
 	OpenStream(ctx context.Context, url string) (io.ReadCloser, error)
 }
 
+// Stage is how far one Record call has got.
+type Stage int
+
+const (
+	StageCapturing  Stage = iota // bytes are being written
+	StageConverting              // segments are being remuxed
+)
+
+// Progress is a snapshot of one Record call. Bytes is cumulative for the call
+// and only meaningful while Stage is StageCapturing.
+type Progress struct {
+	User    string
+	Stage   Stage
+	Segment string // the segment currently being written
+	Bytes   int64
+}
+
 // Options carries the recording knobs resolved from config.Config.
 type Options struct {
 	OutputDir  string
 	Duration   int // seconds, 0 means no cap
 	FFmpegPath string
+	// Report, when set, is called as a capture progresses. It runs on the
+	// capture goroutine, so it must be cheap and must not log.
+	Report func(Progress)
 }
 
 // Recorder writes one live session per Record call.
@@ -82,6 +103,67 @@ func (s *session) open() (captureSink, string, error) {
 	return &rawFile{f: f}, segment, nil
 }
 
+// progress tracks one Record call's reports: the running byte total and the
+// total at the last send, so a copy reports at most once per reportEvery bytes.
+// It is per call, which keeps Recorder itself read-only for concurrent Record
+// calls.
+type progress struct {
+	report  func(Progress)
+	user    string
+	segment string
+	total   int64
+	last    int64
+}
+
+func (p *progress) start(segment string) {
+	p.segment = segment
+	p.send(StageCapturing)
+}
+
+func (p *progress) add(n int) {
+	p.total += int64(n)
+	if p.total-p.last < reportEvery {
+		return
+	}
+	p.send(StageCapturing)
+}
+
+// flush sends the final count, which the throttle may have held back.
+func (p *progress) flush() {
+	if p.total == p.last {
+		return
+	}
+	p.send(StageCapturing)
+}
+
+func (p *progress) converting() {
+	p.segment = ""
+	p.send(StageConverting)
+}
+
+func (p *progress) send(stage Stage) {
+	if p.report == nil {
+		return
+	}
+	p.last = p.total
+	p.report(Progress{User: p.user, Stage: stage, Segment: p.segment, Bytes: p.total})
+}
+
+// countingSink reports the bytes that reached the sink, so copyStream stays
+// unaware of progress reporting.
+type countingSink struct {
+	captureSink
+	progress *progress
+}
+
+func (s countingSink) Write(p []byte) (int, error) {
+	n, err := s.captureSink.Write(p)
+	if n > 0 {
+		s.progress.add(n)
+	}
+	return n, err
+}
+
 // Record captures one live session and returns the final mp4 path.
 func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, error) {
 	start := time.Now()
@@ -97,6 +179,7 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 		ffmpegPath: r.opts.FFmpegPath,
 		base:       filepath.Join(r.opts.OutputDir, user+"="+start.Format("20060102_150405")),
 	}
+	prog := &progress{report: r.opts.Report, user: user}
 	var deadline time.Time
 	if r.opts.Duration > 0 {
 		deadline = start.Add(time.Duration(r.opts.Duration) * time.Second)
@@ -116,7 +199,7 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 			break
 		}
 		kept := len(sess.segments)
-		written, err := r.capture(ctx, sess, roomID, url, deadline)
+		written, err := r.capture(ctx, sess, roomID, url, deadline, prog)
 		if err != nil {
 			var writeErr *writeError
 			if !errors.As(err, &writeErr) {
@@ -145,6 +228,7 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 
 	spin.Stop()
 	logx.Step("STOP", "%s · %s", stopReason(ctx, deadline), ui.Duration(time.Since(start)))
+	prog.converting()
 
 	// The remux must survive the cancellation that stopped the capture: Ctrl-C
 	// is the normal way a recording ends, so ffmpeg gets its own budget.
@@ -176,7 +260,7 @@ func stopReason(ctx context.Context, deadline time.Time) string {
 
 // capture fills a segment from one candidate url, reconnecting after each clean
 // end of stream until the room dies, the deadline passes, or ctx is cancelled.
-func (r *Recorder) capture(ctx context.Context, sess *session, roomID, url string, deadline time.Time) (int64, error) {
+func (r *Recorder) capture(ctx context.Context, sess *session, roomID, url string, deadline time.Time, prog *progress) (int64, error) {
 	var written int64
 	zeroAttempts := 0
 	for {
@@ -217,7 +301,9 @@ func (r *Recorder) capture(ctx context.Context, sess *session, roomID, url strin
 			body.Close()
 			return written, err
 		}
-		n, writeErr := copyStream(ctx, sink, body, deadline)
+		prog.start(segment)
+		n, writeErr := copyStream(ctx, countingSink{captureSink: sink, progress: prog}, body, deadline)
+		prog.flush()
 		body.Close()
 		written += n
 		exitErr := sink.Finish()
