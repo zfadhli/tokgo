@@ -12,6 +12,7 @@ import (
 
 	"tokgo/internal/logx"
 	"tokgo/internal/tiktok"
+	"tokgo/internal/ui"
 )
 
 const (
@@ -100,7 +101,15 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 	if r.opts.Duration > 0 {
 		deadline = start.Add(time.Duration(r.opts.Duration) * time.Second)
 	}
-	logx.Infof("recording %s to %s", user, sess.base)
+	logx.Step("START", "%s", filepath.Base(sess.base))
+	spin := logx.Spin("recording..", func() string {
+		detail := ui.Duration(time.Since(start))
+		if r.opts.Duration > 0 {
+			detail += " / cap " + ui.Duration(time.Duration(r.opts.Duration)*time.Second)
+		}
+		return detail
+	})
+	defer spin.Stop()
 
 	for i, url := range urls {
 		if expired(deadline) {
@@ -134,19 +143,35 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 		return "", tiktok.ErrLiveURL
 	}
 
-	// Name the count, not a segment path: the segment is removed once the mp4
-	// exists, so printing it would point at a file that no longer is there.
-	logx.Infof("recording finished: %d segment(s) captured", len(sess.segments))
+	spin.Stop()
+	logx.Step("STOP", "%s · %s", stopReason(ctx, deadline), ui.Duration(time.Since(start)))
 
 	// The remux must survive the cancellation that stopped the capture: Ctrl-C
 	// is the normal way a recording ends, so ffmpeg gets its own budget.
 	convertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), convertTimeout)
 	defer cancel()
+	spin = logx.Spin("remuxing..", nil)
 	converted, err := Convert(convertCtx, sess.segments, r.opts.FFmpegPath)
+	spin.Stop()
 	if err != nil {
 		logx.Errorf("conversion failed, keeping the raw capture: %v", err)
+		logx.Step("WARN", "raw capture kept at %s", converted)
+		return converted, nil
 	}
+	logx.Step("DONE", "%s", converted)
 	return converted, nil
+}
+
+// stopReason names how the capture ended without capture() having to report it.
+func stopReason(ctx context.Context, deadline time.Time) string {
+	switch {
+	case ctx.Err() != nil:
+		return "interrupted"
+	case expired(deadline):
+		return "duration cap reached"
+	default:
+		return "stream ended"
+	}
 }
 
 // capture fills a segment from one candidate url, reconnecting after each clean
@@ -163,7 +188,6 @@ func (r *Recorder) capture(ctx context.Context, sess *session, roomID, url strin
 			return written, nil
 		}
 		if (err == nil && !alive) || errors.Is(err, tiktok.ErrNotLive) {
-			logx.Infof("user is no longer live, stopping recording")
 			return written, nil
 		}
 		if err != nil {

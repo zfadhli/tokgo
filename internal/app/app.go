@@ -14,6 +14,7 @@ import (
 	"tokgo/internal/record"
 	"tokgo/internal/telegram"
 	"tokgo/internal/tiktok"
+	"tokgo/internal/ui"
 )
 
 const (
@@ -154,9 +155,6 @@ func (r *Runner) once(ctx context.Context, user string) error {
 		return err
 	}
 
-	logx.Infof("username: @%s", user)
-	logx.Infof("room_id:  %s", roomID)
-
 	alive, err := r.lookup.RoomAlive(ctx, roomID)
 	if err == nil && !alive {
 		err = tiktok.ErrNotLive
@@ -164,6 +162,8 @@ func (r *Runner) once(ctx context.Context, user string) error {
 	if err != nil {
 		return err
 	}
+
+	logx.Infof("@%s · room %s · LIVE", user, roomID)
 
 	return r.capture(ctx, user, roomID)
 }
@@ -174,7 +174,6 @@ func (r *Runner) capture(ctx context.Context, user, roomID string) error {
 	if err != nil {
 		return err
 	}
-	logx.Infof("saved %s", path)
 	if !r.cfg.UploadTelegram {
 		return nil
 	}
@@ -200,8 +199,7 @@ func (r *Runner) automatic(ctx context.Context, user string) error {
 			var alive bool
 			alive, err = r.lookup.RoomAlive(ctx, roomID)
 			if err == nil && alive {
-				logx.Infof("username: @%s", user)
-				logx.Infof("room_id:  %s", roomID)
+				logx.Infof("@%s · room %s · LIVE", user, roomID)
 				err = r.capture(ctx, user, roomID)
 			} else if err == nil {
 				err = tiktok.ErrNotLive
@@ -214,8 +212,7 @@ func (r *Runner) automatic(ctx context.Context, user string) error {
 			}
 			if tiktok.Transient(err) {
 				logx.Infof("@%s: %v", user, err)
-				logx.Infof("waiting %d minutes before rechecking", r.cfg.AutomaticInterval)
-				if !sleep(ctx, interval) {
+				if !wait(ctx, "waiting for next stream..", interval) {
 					return nil
 				}
 				continue
@@ -224,17 +221,27 @@ func (r *Runner) automatic(ctx context.Context, user string) error {
 				return err
 			}
 			logx.Errorf("connection problem: %v", err)
-			if !sleep(ctx, connectionBackoff) {
+			if !wait(ctx, "connection lost, retrying..", connectionBackoff) {
 				return nil
 			}
 			continue
 		}
 
-		logx.Infof("waiting %d minutes before rechecking", r.cfg.AutomaticInterval)
-		if !sleep(ctx, interval) {
+		if !wait(ctx, "waiting for next stream..", interval) {
 			return nil
 		}
 	}
+}
+
+// wait shows the poll or the retry on the spinner for the whole sleep.
+func wait(ctx context.Context, label string, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	sp := logx.Spin(label, func() string {
+		return ui.Duration(time.Until(deadline)) + " left"
+	})
+	ok := sleep(ctx, d)
+	sp.Stop()
+	return ok
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {

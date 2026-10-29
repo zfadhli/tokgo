@@ -77,6 +77,34 @@ Ctrl-C twice aborts immediately, leaving the `.ts` segments captured so far.
 
 ## Output
 
+Each run opens with the wordmark, then a short header describing what it is
+about to do:
+
+```
+tokgo v0.1.0 — TikTok LIVE recorder
+https://github.com/zfadhli/tokgo · MIT License
+
+  target  @aljazeeraenglish · wait for live, poll 3min
+  ffmpeg  7.1.1 · /usr/bin/ffmpeg
+  output  /home/you/recordings · 182.4 GB free
+  cookies sessionid_ss ••••b9c2
+```
+
+The `target` line carries the URL, the `@` usernames or the room id, followed by
+the mode, with `, cap 4min` appended when `-duration` is set. `output` is the
+absolute directory and the space left on it, and `cookies` names the login cookie
+with all but its last four characters masked, or `none · anonymous`.
+
+While it works, tokgo keeps one status line instead of scrolling. A spinner
+counts the elapsed time during the capture (`recording.. (4min 12s / cap
+30min)`), sits on the remux, and becomes the countdown while it waits for the
+next stream or retries a dropped connection. Log lines carry a coloured tag in a
+fixed column (`[INFO]`, `[START]`, `[STOP]`, `[DONE]`, `[WARN]`, `[ERROR]`). A log
+line arriving mid-spinner clears the spinner line, prints, then redraws it, so
+two writes never share a line. Piping the output, setting `NO_COLOR`, or running
+under `tokgo tui` drops the colour and the motion: a spinner prints once as
+`o recording..` and the tags stay the same plain text.
+
 Capture writes one MPEG-TS segment per connection: `aljazeeraenglish=20261028_172928.000.ts`,
 `.001.ts`, and so on. A new segment starts on every reconnect, because a
 reconnected FLV restarts its timestamps and appending it would make ffmpeg drop
