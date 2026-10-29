@@ -832,18 +832,19 @@ func TestLoadSavedBuildsIdleRows(t *testing.T) {
 
 func TestStartCommand(t *testing.T) {
 	cases := []struct {
-		name      string
-		line      string
-		saved     []string
-		running   bool
-		wantUsers []string
-		wantAdded []string
-		wantLog   string
+		name       string
+		line       string
+		saved      []string
+		running    bool
+		wantUsers  []string
+		wantAdded  []string
+		wantQueued []string
+		wantLog    string
 	}{
 		{name: "idle starts the one", line: "/start alpha", wantUsers: []string{"alpha"}},
-		{name: "idle starts them all", line: "/start all", saved: []string{"alpha", "beta"}, wantUsers: []string{"alpha", "beta"}},
+		{name: "idle starts them all", line: "/start all", saved: []string{"alpha", "beta"}, wantUsers: []string{"alpha"}, wantQueued: []string{"beta"}},
 		{name: "running adds the one", line: "/start beta", saved: []string{"alpha"}, running: true, wantAdded: []string{"beta"}},
-		{name: "running adds them all", line: "/start all", saved: []string{"alpha", "beta"}, running: true, wantAdded: []string{"alpha", "beta"}},
+		{name: "running adds them all", line: "/start all", saved: []string{"alpha", "beta"}, running: true, wantAdded: []string{"alpha"}, wantQueued: []string{"beta"}},
 		{name: "all with nothing saved", line: "/start all", wantLog: "no saved targets · /add <name>"},
 		{name: "bare start", line: "/start", wantLog: "start needs a username or all"},
 	}
@@ -874,12 +875,18 @@ func TestStartCommand(t *testing.T) {
 				if !slices.Equal(ctrl.added, tc.wantAdded) {
 					t.Fatalf("added = %q, want %q", ctrl.added, tc.wantAdded)
 				}
+				if !slices.Equal(m.pendingStart, tc.wantQueued) {
+					t.Fatalf("queued = %q, want %q", m.pendingStart, tc.wantQueued)
+				}
 			default:
 				if m.ctrl == nil {
 					t.Fatal("the runner was not installed")
 				}
 				if !slices.Equal(m.users, tc.wantUsers) {
 					t.Fatalf("run users = %q, want %q", m.users, tc.wantUsers)
+				}
+				if !slices.Equal(m.pendingStart, tc.wantQueued) {
+					t.Fatalf("queued = %q, want %q", m.pendingStart, tc.wantQueued)
 				}
 				if cmd == nil {
 					t.Fatal("starting a run must return the tea.Cmd that runs it")
@@ -892,16 +899,19 @@ func TestStartCommand(t *testing.T) {
 	}
 }
 
-// TestStartAllRemembersUndSavedNamesOrder proves /start all follows the list
-// order the file keeps.
+// TestStartAllUsesTheSavedOrder proves /start all starts the first name at once
+// and queues the rest in the order the file keeps.
 func TestStartAllUsesTheSavedOrder(t *testing.T) {
 	m := newModel()
 	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
 	m.list = savedList("beta", "alpha")
 	m.syncRows()
 	submit(m, "/start all")
-	if !slices.Equal(m.users, []string{"beta", "alpha"}) {
-		t.Fatalf("users = %q, want the list order", m.users)
+	if !slices.Equal(m.users, []string{"beta"}) {
+		t.Fatalf("first run = %q, want beta", m.users)
+	}
+	if !slices.Equal(m.pendingStart, []string{"alpha"}) {
+		t.Fatalf("queued = %q, want the list order", m.pendingStart)
 	}
 }
 
@@ -1625,8 +1635,8 @@ func TestAutostartCommandMarksTheGroup(t *testing.T) {
 	if !m.targets[m.byName["alpha"]].auto {
 		t.Fatal("the idle row must show the group")
 	}
-	if len(m.pendingAuto) != 0 {
-		t.Fatalf("a mark is for the next launch, not this one: %q", m.pendingAuto)
+	if len(m.pendingStart) != 0 {
+		t.Fatalf("a mark is for the next launch, not this one: %q", m.pendingStart)
 	}
 	if got := logText(m); !strings.Contains(got, "starts with the next tokgo tui") {
 		t.Fatalf("activity missing the confirmation:\n%s", got)
@@ -1688,8 +1698,8 @@ func TestBootStaggersTheAutostartGroup(t *testing.T) {
 	ctrl := &fakeCtrl{}
 	m.makeRunner = func(config.Config, telegram.Config) controller { return ctrl }
 	m.loadSaved()
-	if !slices.Equal(m.pendingAuto, []string{"alpha", "beta"}) {
-		t.Fatalf("queue = %q, want the autostart group only", m.pendingAuto)
+	if !slices.Equal(m.pendingStart, []string{"alpha", "beta"}) {
+		t.Fatalf("queue = %q, want the autostart group only", m.pendingStart)
 	}
 
 	start := m.now
@@ -1714,8 +1724,8 @@ func TestBootStaggersTheAutostartGroup(t *testing.T) {
 	if !slices.Equal(ctrl.added, []string{"beta"}) {
 		t.Fatalf("added = %q, want [beta] after the stagger", ctrl.added)
 	}
-	if len(m.pendingAuto) != 0 {
-		t.Fatalf("the queue must drain, got %q", m.pendingAuto)
+	if len(m.pendingStart) != 0 {
+		t.Fatalf("the queue must drain, got %q", m.pendingStart)
 	}
 	if slices.Contains(ctrl.added, "gamma") {
 		t.Fatalf("the manual group must not autostart: %q", ctrl.added)
@@ -1728,32 +1738,41 @@ func TestRemoveAndDropCancelTheAutostartQueue(t *testing.T) {
 	m := newModel()
 	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
 	m.list = autoList("alpha", "beta")
-	m.pendingAuto = m.autoNames()
+	m.pendingStart = m.autoNames()
 
 	submit(m, "/remove beta")
-	if slices.Contains(m.pendingAuto, "beta") {
-		t.Fatalf("a removed name must leave the queue: %q", m.pendingAuto)
+	if slices.Contains(m.pendingStart, "beta") {
+		t.Fatalf("a removed name must leave the queue: %q", m.pendingStart)
 	}
 
 	m.ctrl = &fakeCtrl{}
 	submit(m, "/drop alpha")
-	if slices.Contains(m.pendingAuto, "alpha") {
-		t.Fatalf("a dropped name must leave the queue: %q", m.pendingAuto)
+	if slices.Contains(m.pendingStart, "alpha") {
+		t.Fatalf("a dropped name must leave the queue: %q", m.pendingStart)
 	}
 }
 
-// TestStartAllCoversBothGroups proves a manual start all still starts the whole
-// list, autostart group included.
+// TestStartAllCoversBothGroups proves a manual start all walks the whole list,
+// autostart group included, without queueing a name twice.
 func TestStartAllCoversBothGroups(t *testing.T) {
 	m := newModel()
+	ctrl := &fakeCtrl{}
+	m.makeRunner = func(config.Config, telegram.Config) controller { return ctrl }
 	m.list = []saved{{user: "alpha"}, {user: "beta", auto: true}}
-	m.pendingAuto = m.autoNames()
+	m.pendingStart = m.autoNames()
 	m.syncRows()
 	submit(m, "/start all")
-	if !slices.Equal(m.users, []string{"alpha", "beta"}) {
-		t.Fatalf("users = %q, want both groups", m.users)
+	if !slices.Equal(m.users, []string{"alpha"}) {
+		t.Fatalf("users = %q, want the first name only", m.users)
 	}
-	if len(m.pendingAuto) != 0 {
-		t.Fatalf("a manual start must not leave a queued double start: %q", m.pendingAuto)
+	if !slices.Equal(m.pendingStart, []string{"beta"}) {
+		t.Fatalf("queued = %q, want the second name once", m.pendingStart)
+	}
+	m.Update(tickMsg(m.now.Add(autoStagger)))
+	if !slices.Equal(ctrl.added, []string{"beta"}) {
+		t.Fatalf("added = %q, want [beta] after the stagger", ctrl.added)
+	}
+	if len(m.pendingStart) != 0 {
+		t.Fatalf("the queue must drain: %q", m.pendingStart)
 	}
 }
