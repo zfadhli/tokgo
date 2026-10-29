@@ -156,7 +156,7 @@ input shows what tab would fill.
 | `/proxy <url>` | proxy for lookups, alone clears it |
 | `/telegram on\|off` | upload each recording when it is written |
 | `/stop <name\|all>` | stop one queued or recording target, or the whole run: the capture is finished and remuxed |
-| `/quit` | leave now, without waiting for a remux; the only exit |
+| `/quit` | stop the run, let the remux finish, then exit; a second `/quit` leaves at once |
 | `/help` | print the list |
 
 Settings changes apply to the next run and say so if one is in flight; nothing is
@@ -164,10 +164,11 @@ restarted behind your back. The knobs are saved to
 `~/.config/tokgo/settings.json`, so `/output <dir>` is still set on the next
 launch. `/restart` is the one command that does restart something, and only
 after the old capture has been remuxed. `up`/`down` walk the lines you submitted
-before and `esc` stops a run or clears the line. `/quit` is the only way out:
-Ctrl-C is not bound here, so a stray one cannot abandon a remux. Validation goes
-through the same parser the flags use, so a command cannot accept a combination
-the CLI would reject.
+before and `esc` stops a run or clears the line. `/quit` is the only way out: it
+stops the run and leaves when the last remux returned, so the screen cannot
+abandon a capture; type it twice if a remux hangs. Ctrl-C is not bound here, so
+a stray one cannot abandon a remux. Validation goes through the same parser the
+flags use, so a command cannot accept a combination the CLI would reject.
 
 Below 72 columns the three columns fold back into one list, which keeps the name,
 the phase, the timer and the size. A target that is done, stopped or failed goes
