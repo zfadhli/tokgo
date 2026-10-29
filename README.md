@@ -87,9 +87,6 @@ reference project ships `useast2a` in its default file and many users hit this.
 The recorder defends itself: on a `4003110` answer with that cookie present it
 retries once without it and says so in the log.
 
-```json
-```
-
 Login-gated rooms are fatal in every mode: the run stops with
 `live is private, login required` and exit status 1 instead of polling a room no
 retry can unlock. Only genuinely retryable conditions (not live yet, empty CDN,
