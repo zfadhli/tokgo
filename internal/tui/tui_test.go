@@ -1776,3 +1776,67 @@ func TestStartAllCoversBothGroups(t *testing.T) {
 		t.Fatalf("the queue must drain: %q", m.pendingStart)
 	}
 }
+
+// TestStopOneTargetKeepsTheRun proves /stop <name> stops only that target,
+// whether it is recording or still waiting for its stagger window.
+func TestStopOneTargetKeepsTheRun(t *testing.T) {
+	m := newModel()
+	m.userPath = filepath.Join(t.TempDir(), "targets.txt")
+	submit(m, "/add alpha, beta")
+	ctrl := &fakeCtrl{}
+	m.ctrl = ctrl
+
+	submit(m, "/stop @alpha")
+	if !slices.Equal(ctrl.dropped, []string{"alpha"}) {
+		t.Fatalf("dropped = %q, want [alpha]", ctrl.dropped)
+	}
+	if m.finishing {
+		t.Fatal("stopping one target must not stop the run")
+	}
+	if got := loadTargets(m.userPath); !slices.Equal(got, savedList("alpha", "beta")) {
+		t.Fatalf("a stopped target stays saved: %s", names(got))
+	}
+
+	// A queued name is cancelled without any runner to drop it from.
+	m.ctrl = nil
+	m.pendingStart = []string{"alpha"}
+	submit(m, "/stop alpha")
+	if len(m.pendingStart) != 0 {
+		t.Fatalf("a stopped queue entry must go: %q", m.pendingStart)
+	}
+	if got := logText(m); !strings.Contains(got, "stopped @alpha · not started") {
+		t.Fatalf("activity missing the cancellation:\n%s", got)
+	}
+}
+
+// TestStopAllEndsTheRun proves /stop all matches a bare /stop.
+func TestStopAllEndsTheRun(t *testing.T) {
+	m := newModel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.ctrl = &fakeCtrl{}
+	m.ctx, m.cancel = ctx, cancel
+	m.pendingStart = []string{"alpha"}
+	m.restarting = []string{"beta"}
+
+	submit(m, "/stop all")
+	if ctx.Err() == nil {
+		t.Fatal("/stop all must cancel the run")
+	}
+	if !m.finishing {
+		t.Fatal("/stop all must mark the run as stopping")
+	}
+	if len(m.pendingStart) != 0 || len(m.restarting) != 0 {
+		t.Fatalf("queues must clear: %q %q", m.pendingStart, m.restarting)
+	}
+}
+
+// TestStopCompletesNames proves tab offers all and the saved names after /stop.
+func TestStopCompletesNames(t *testing.T) {
+	m := newModel()
+	m.list = savedList("alpha")
+	got := m.candidates("/stop ")
+	if !slices.Equal(got, []string{"/stop all", "/stop alpha"}) {
+		t.Fatalf("candidates = %q", got)
+	}
+}

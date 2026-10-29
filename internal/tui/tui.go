@@ -795,7 +795,7 @@ var commands = []command{
 	{"output", "<dir>", "output directory"},
 	{"proxy", "<url>", "proxy for lookups, alone clears it"},
 	{"telegram", "on|off", "upload each recording when it is written"},
-	{"stop", "", "stop the run and remux what was captured"},
+	{"stop", "<name|all>", "stop one target, or the whole run and remux what was captured"},
 	{"quit", "", "leave now, without finishing a remux"},
 	{"help", "", "show this list"},
 }
@@ -829,9 +829,9 @@ func (m *Model) candidates(value string) []string {
 		}
 	}
 	switch name {
-	case "/start":
+	case "/start", "/stop":
 		if strings.HasPrefix("all", arg) {
-			out = append(out, "/start all")
+			out = append(out, name+" all")
 		}
 		names()
 	case "/restart", "/remove", "/drop", "/add", "/autostart":
@@ -962,7 +962,7 @@ func (m *Model) command(line string) tea.Cmd {
 	case "drop":
 		m.drop(rest)
 	case "stop":
-		m.stopCommand()
+		m.stopCommand(rest)
 	case "quit":
 		m.stopRun()
 		m.quit = true
@@ -1009,22 +1009,37 @@ func (m *Model) setTelegram(raw string) {
 	m.saveSettings()
 }
 
+// drop stops one target and leaves it in the list. A target still waiting for
+// its stagger window is cancelled instead, so a queued name cannot start after
+// a stop.
 func (m *Model) drop(raw string) {
 	user := strings.TrimPrefix(strings.TrimSpace(raw), "@")
 	if user == "" {
 		m.warn("drop needs a username")
 		return
 	}
-	if m.ctrl == nil {
+	m.forgetRestart(user)
+	queued := slices.Contains(m.pendingStart, user)
+	m.forgetStart(user)
+	if m.ctrl != nil {
+		m.ctrl.DropUser(user)
+		return
+	}
+	if !queued {
 		m.warn(app.ErrNotRunning.Error())
 		return
 	}
-	m.forgetRestart(user)
-	m.forgetStart(user)
-	m.ctrl.DropUser(user)
+	m.appendLog(logLine{level: "STOP", text: "stopped @" + user + " · not started"})
 }
 
-func (m *Model) stopCommand() {
+// stopCommand stops one target with its name, or the whole run with all, a
+// bare command or nothing typed at all.
+func (m *Model) stopCommand(raw string) {
+	name := strings.TrimPrefix(strings.TrimSpace(raw), "@")
+	if name != "" && name != "all" {
+		m.drop(name)
+		return
+	}
 	if m.ctrl == nil {
 		m.warn(app.ErrNotRunning.Error())
 		return
