@@ -107,6 +107,7 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 		if expired(deadline) {
 			break
 		}
+		kept := len(sess.segments)
 		written, err := r.capture(ctx, sess, roomID, url, deadline)
 		if err != nil {
 			var writeErr *writeError
@@ -119,7 +120,16 @@ func (r *Recorder) Record(ctx context.Context, user, roomID string) (string, err
 		if written >= minStreamBytes || (written > 0 && ctx.Err() != nil) {
 			break
 		}
-		logx.Warnf("live stream url %d/%d delivered %d bytes, trying the next one", i+1, len(urls), written)
+		// A candidate we refuse still wrote its segment, and a truncated
+		// segment makes ffmpeg reject the whole concat list.
+		discarded := sess.segments[kept:]
+		sess.segments = sess.segments[:kept]
+		for _, segment := range discarded {
+			if err := os.Remove(segment); err != nil && !os.IsNotExist(err) {
+				logx.Warnf("could not remove the discarded segment %s: %v", segment, err)
+			}
+		}
+		logx.Warnf("live stream url %d/%d delivered %d bytes, discarded its %d segment(s), trying the next one", i+1, len(urls), written, len(discarded))
 	}
 	if len(sess.segments) == 0 {
 		return "", tiktok.ErrLiveURL
