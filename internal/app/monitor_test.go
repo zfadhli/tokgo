@@ -94,20 +94,21 @@ func captureLog(t *testing.T) func() []string {
 
 func TestPhaseNamesAndActivity(t *testing.T) {
 	cases := []struct {
-		phase  Phase
-		name   string
-		active bool
+		phase    Phase
+		name     string
+		active   bool
+		terminal bool
 	}{
-		{PhaseQueued, "queued", false},
-		{PhaseResolving, "resolving", true},
-		{PhaseWaiting, "waiting", true},
-		{PhaseLive, "live", true},
-		{PhaseRecording, "recording", true},
-		{PhaseConverting, "remuxing", true},
-		{PhaseDone, "done", false},
-		{PhaseStopped, "stopped", false},
-		{PhaseFailed, "failed", false},
-		{Phase(99), "Phase(99)", false},
+		{PhaseQueued, "queued", false, false},
+		{PhaseResolving, "resolving", true, false},
+		{PhaseWaiting, "waiting", true, false},
+		{PhaseLive, "live", true, false},
+		{PhaseRecording, "recording", true, false},
+		{PhaseConverting, "remuxing", true, false},
+		{PhaseDone, "done", false, true},
+		{PhaseStopped, "stopped", false, true},
+		{PhaseFailed, "failed", false, true},
+		{Phase(99), "Phase(99)", false, false},
 	}
 	for _, tc := range cases {
 		if got := tc.phase.String(); got != tc.name {
@@ -115,6 +116,9 @@ func TestPhaseNamesAndActivity(t *testing.T) {
 		}
 		if got := tc.phase.Active(); got != tc.active {
 			t.Errorf("%s.Active() = %v, want %v", tc.name, got, tc.active)
+		}
+		if got := tc.phase.Terminal(); got != tc.terminal {
+			t.Errorf("%s.Terminal() = %v, want %v", tc.name, got, tc.terminal)
 		}
 	}
 }
