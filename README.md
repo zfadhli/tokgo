@@ -71,16 +71,24 @@ immediately instead of polling a stranger's follower list (TikTok's anonymous
 pages embed a random `secUid`). A follower is not started twice while its
 recording is running.
 
-Ctrl-C once stops the capture, finalises the file and runs the mp4 remux.
-Ctrl-C twice aborts immediately, leaving a partial `_flv.mp4`.
+Ctrl-C once stops the capture, finalises the segments and runs the mp4 remux.
+Ctrl-C twice aborts immediately, leaving the `.ts` segments captured so far.
 
 ## Output
 
-Files land as `TK_<user>_<YYYY.MM.DD_HH-MM-SS>_flv.mp4`. When the recording
-finishes the raw container is remuxed to `TK_<user>_<...>.mp4` with
-`ffmpeg -c copy` (stream copy, no quality loss) and the `_flv.mp4` original is
-deleted. With `-bitrate` the video is re-encoded with libx264 while audio is
-copied.
+Capture writes one MPEG-TS segment per connection: `aljazeeraenglish=20261028_172928.000.ts`,
+`.001.ts`, and so on. A new segment starts on every reconnect, because a
+reconnected FLV restarts its timestamps and appending it would make ffmpeg drop
+that connection's video. When ffmpeg cannot start at all the capture goes
+straight to a raw `.flv` segment instead.
+
+At the end, or on Ctrl-C, the segments are remuxed in order with
+`ffmpeg -c copy` (stream copy, no quality loss) into
+`aljazeeraenglish=20261028_172928.mp4`, and the segments are removed. With
+`-bitrate` the video is re-encoded with libx264 while audio is copied.
+
+If the remux fails the segments are kept, so no captured byte is lost, and a
+hard kill leaves the current `.ts` segment playable.
 
 If every advertised CDN endpoint yields fewer than 4 KiB, no file is left
 behind and the run fails with `unable to retrieve the live stream url`.
@@ -225,13 +233,15 @@ TikTok, and the same signed room URL works through both TLS stacks.
 
 Recorded on 2026-10-29 against `@aljazeeraenglish` and `@tiktok`:
 
-- `-user` → tikrec sign → room id → liveness → capture: `TK_aljazeeraenglish_*.mp4`,
-  ffprobe `h264 1280x720 25fps + aac`, 2.0 MB for 8.18 s.
+- `-user` → tikrec sign → room id → liveness → capture:
+  `aljazeeraenglish=20261028_172928.mp4`, ffprobe `h264 1280x720 25fps + aac`,
+  2.0 MB for 8.18 s.
 - 60 s cap with `-race`: exit 0, no data race, 62.19 s container (the CDN pushes
   roughly 2 s of buffered media on connect), 1.93 Mbps, 15 MB.
 - `-bitrate 800k`: re-encoded to 15.08 s / 1.01 Mbps, video and audio present.
 - `-url`, `-room_id`: both resolve to the same room and record.
-- Ctrl-C once: capture finalised and remuxed to `.mp4`, `_flv.mp4` removed.
+- Ctrl-C once: capture finalised, segments remuxed into the `.mp4`, segments
+  removed.
 - `-mode automatic`: records, then reports the wait before the next poll.
 - Multi-user: both users run concurrently, one live one not; the live one lands,
   the dead one is reported once with its `@name` prefix, exit status 1.
