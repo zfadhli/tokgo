@@ -58,6 +58,12 @@ func (p Phase) Active() bool {
 	return p >= PhaseResolving && p <= PhaseConverting
 }
 
+// Terminal reports whether the phase has ended. Queued is not terminal: the
+// target has not started yet.
+func (p Phase) Terminal() bool {
+	return p == PhaseDone || p == PhaseStopped || p == PhaseFailed
+}
+
 // Status is one observation about one target. Every field except User and Phase
 // may be empty; a consumer must treat each Status as a full snapshot of what it
 // shows, not a delta.
