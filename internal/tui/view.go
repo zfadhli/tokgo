@@ -71,7 +71,7 @@ func (m *Model) hintLine() string {
 func (m *Model) View() string {
 	w, h := m.size()
 	m.input.Width = max(w-3, 1)
-	rows, activity := m.budget(w, h)
+	rows, activity, spacer := m.budget(w, h)
 
 	lines := make([]string, 0, h)
 	lines = append(lines, cut(m.header(w), w), rule(w))
@@ -84,6 +84,7 @@ func (m *Model) View() string {
 		lines = append(lines, m.tableHead(w))
 		lines = append(lines, m.tableBody(rows, w)...)
 	}
+	lines = append(lines, make([]string, spacer)...)
 	lines = append(lines, ghostStyle.Render("activity"))
 	lines = append(lines, m.logTail(activity, w)...)
 	lines = append(lines,
@@ -105,18 +106,20 @@ func (m *Model) View() string {
 	return strings.Join(lines, "\n")
 }
 
-// budget splits the height. The empty table keeps one row for its message;
-// that row comes out of the activity pane, never out of the fixed skeleton.
-func (m *Model) budget(w, h int) (rows, activity int) {
-	rows = min(m.tallest(w), max(1, (h-7)/3))
-	rows = min(rows, 8)
-	rows = min(rows, max(h-8, 0))
-	rows = max(rows, 0)
+// budget splits the height. The empty table keeps one row for its message; that
+// row comes out of the activity pane, never out of the fixed skeleton. The
+// activity pane is capped at half the screen, and whatever it does not take sits
+// between the table and the log, so the log stays pinned to the bottom.
+func (m *Model) budget(w, h int) (rows, activity, spacer int) {
+	body := max(h-7, 0)
+	rows = min(min(m.tallest(w), 8), max(body/3, 1))
 	if len(m.targets) == 0 && h >= 8 {
 		rows = max(rows, 1)
 	}
-	activity = max(h-7-rows, 0)
-	return rows, activity
+	rows = min(rows, body)
+	activity = min(max(body-rows, 0), max(h/2-1, 0))
+	spacer = max(body-rows-activity, 0)
+	return rows, activity, spacer
 }
 
 func (m *Model) header(w int) string {

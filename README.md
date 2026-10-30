@@ -172,7 +172,9 @@ flags use, so a command cannot accept a combination the CLI would reject.
 
 Below 72 columns the three columns fold back into one list, which keeps the name,
 the phase, the timer and the size. A target that is done, stopped or failed goes
-back to the idle column, so a live slot never holds a finished capture.
+back to the idle column, so a live slot never holds a finished capture. The
+activity pane never takes more than half the screen; what it does not use sits as
+blank space between the table and the log, so the log stays pinned to the bottom.
 
 ## How it works
 

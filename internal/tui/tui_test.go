@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -730,6 +731,29 @@ func TestTerminalRowsReturnToIdle(t *testing.T) {
 	}
 	if i := strings.Index(lines[3], "@rec"); i < 2*colW+2*colGap {
 		t.Fatalf("the recording row must sit in the live column:\n%s", lines[3])
+	}
+}
+
+// TestActivityPaneStaysHalf proves the log cannot eat the screen: the pane is at
+// most half the terminal, and the lines it gives up sit between the table and the
+// log, so the whole screen still fills.
+func TestActivityPaneStaysHalf(t *testing.T) {
+	for _, h := range []int{10, 16, 24, 40} {
+		m := newModel()
+		m.width, m.height = 100, h
+		for i := 0; i < 40; i++ {
+			m.logs = append(m.logs, logLine{level: "INFO", text: fmt.Sprintf("log %d", i)})
+		}
+		rows, activity, spacer := m.budget(100, h)
+		if activity+1 > h/2 {
+			t.Fatalf("h=%d: the activity pane takes %d lines, more than half", h, activity+1)
+		}
+		if body := rows + activity + spacer; body != h-7 {
+			t.Fatalf("h=%d: table %d + activity %d + spacer %d = %d, want %d", h, rows, activity, spacer, body, h-7)
+		}
+		if got := len(strings.Split(m.View(), "\n")); got != h {
+			t.Fatalf("h=%d: %d lines", h, got)
+		}
 	}
 }
 
