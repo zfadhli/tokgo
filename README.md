@@ -30,7 +30,7 @@ written. Press it twice to abort immediately and keep the raw `.ts` segments.
 ## What a run looks like
 
 ```text
-tokgo v0.2.0 — TikTok LIVE recorder
+tokgo v0.2.1 — TikTok LIVE recorder
 https://github.com/zfadhli/tokgo · MIT License
 
   target  @skynews · record once
@@ -105,7 +105,7 @@ and live, the runner's log under them, an input line pinned to the bottom, and
 every command typed where the cursor is. Nothing switches screens.
 
 ```text
-tokgo 0.2.0 · monitor                                   ● 1 recording · 3 targets · 00:12
+tokgo 0.2.1 · monitor                                   ● 1 recording · 3 targets · 00:12
 ────────────────────────────────────────────────────────────────────────────────────────
 idle 1                        polling 1                     live 1
 idle   @donut_ntp.…           wait   @natgeo        -00:14  REC    @aljazeerae…    00:12

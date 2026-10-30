@@ -18,7 +18,7 @@
     <text class="mono" x="76" y="58" font-size="16" letter-spacing="3.2" fill="#25f4ee">TIKTOK LIVE → MP4</text>
 
     <text class="mono" x="76" y="140" font-size="80" font-weight="700" fill="#e6e8eb">tokgo</text>
-    <text class="mono" x="340" y="140" font-size="19" fill="#8a909a">v0.2.0</text>
+    <text class="mono" x="340" y="140" font-size="19" fill="#8a909a">v0.2.1</text>
 
     <text class="sans" x="76" y="180" font-size="24" fill="#e6e8eb">One screen, three columns, every account at once.</text>
     <text class="mono" x="76" y="208" font-size="15" fill="#8a909a">Go binary · ffmpeg copy · MIT</text>
