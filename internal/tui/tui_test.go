@@ -757,6 +757,27 @@ func TestActivityPaneStaysHalf(t *testing.T) {
 	}
 }
 
+// TestWaitingCountdownRenews pins the poll countdown: the runner announces
+// waiting again after every failed check, so the timer restarts instead of
+// sitting at -00:00 for the rest of the run.
+func TestWaitingCountdownRenews(t *testing.T) {
+	m := newModel()
+	m.runInterval = 3 * time.Minute
+	m.applyStatus(app.Status{User: "a", Phase: app.PhaseWaiting})
+	m.now = m.now.Add(2 * time.Minute)
+	if got := m.timer(m.targets[0]); got != "-01:00" {
+		t.Fatalf("countdown = %q, want -01:00", got)
+	}
+
+	m.applyStatus(app.Status{User: "a", Phase: app.PhaseWaiting, Detail: "not live"})
+	if got := m.timer(m.targets[0]); got != "-03:00" {
+		t.Fatalf("the countdown did not renew: %q", got)
+	}
+	if got := m.targets[0].active; got != 2*time.Minute {
+		t.Fatalf("active = %v, want 2m: the wait it left is still counted", got)
+	}
+}
+
 func TestLayoutFitsTheTerminal(t *testing.T) {
 	states := []struct {
 		name  string

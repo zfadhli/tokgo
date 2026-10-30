@@ -1133,7 +1133,9 @@ func (m *Model) applyStatus(s app.Status) tea.Cmd {
 	}
 	t := &m.targets[i]
 	t.idle = false
-	if t.phase != s.Phase {
+	// A poll cycle announces waiting again after every failed check, so a repeat
+	// of the same phase restarts the countdown instead of leaving it at zero.
+	if t.phase != s.Phase || s.Phase == app.PhaseWaiting {
 		if t.phase.Active() {
 			t.active += now.Sub(t.since)
 		}
