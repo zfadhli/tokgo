@@ -163,18 +163,22 @@ Settings changes apply to the next run and say so if one is in flight; nothing i
 restarted behind your back. The knobs are saved to
 `~/.config/tokgo/settings.json`, so `/output <dir>` is still set on the next
 launch. `/restart` is the one command that does restart something, and only
-after the old capture has been remuxed. `up`/`down` walk the lines you submitted
-before and `esc` stops a run or clears the line. `/quit` is the only way out: it
-stops the run and leaves when the last remux returned, so the screen cannot
-abandon a capture; type it twice if a remux hangs. Ctrl-C is not bound here, so
-a stray one cannot abandon a remux. Validation goes through the same parser the
-flags use, so a command cannot accept a combination the CLI would reject.
+after the old capture has been remuxed. `up`/`down` walk the lines you submitted,
+`pgup`/`pgdown` page the target table, and `esc` stops a run or clears the line.
+`/quit` is the only way out: it stops the run and leaves when the last remux
+returned, so the screen cannot abandon a capture; type it twice if a remux hangs.
+Ctrl-C is not bound here, so a stray one cannot abandon a remux. Validation goes
+through the same parser the flags use, so a command cannot accept a combination
+the CLI would reject.
 
 Below 72 columns the three columns fold back into one list, which keeps the name,
 the phase, the timer and the size. A target that is done, stopped or failed goes
-back to the idle column, so a live slot never holds a finished capture. The
-activity pane never takes more than half the screen; what it does not use sits as
-blank space between the table and the log, so the log stays pinned to the bottom.
+back to the idle column, so a live slot never holds a finished capture. The table
+takes what it needs up to half the screen and scrolls past that, with `▴`/`▾` on
+a column header while rows are off screen; the folded list puts its visible range
+in the title instead. The activity pane never takes more than half the screen;
+what it does not use sits as blank space between the table and the log, so the log
+stays pinned to the bottom.
 
 ## How it works
 

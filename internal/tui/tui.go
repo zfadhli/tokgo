@@ -106,6 +106,7 @@ type Model struct {
 	settingsPath string    // where the input-line knobs persist; "" disables saving
 	restarting   []string  // targets to start again once their run is gone
 	compIdx      int       // cycling index into the live completion set
+	top          int       // first table row on screen; the table scrolls past half a screen
 	logs         []logLine
 	started      time.Time
 	ended        time.Time
@@ -285,6 +286,12 @@ func (m *Model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down":
 		m.recall(1)
 		return m, nil
+	case "pgup":
+		m.scrollTable(-1)
+		return m, nil
+	case "pgdown":
+		m.scrollTable(1)
+		return m, nil
 	case "enter":
 		return m, m.submit()
 	case "tab":
@@ -325,6 +332,15 @@ func (m *Model) recall(delta int) {
 		return
 	}
 	m.input.SetValue(m.history[next])
+}
+
+// scrollTable moves the table window one page. The offset is clamped to the
+// longest column, so a page past the end lands on the end and a page back from
+// there returns at once.
+func (m *Model) scrollTable(dir int) {
+	w, h := m.size()
+	rows, _, _ := m.budget(w, h)
+	m.top = min(max(m.top+dir*max(rows, 1), 0), max(m.tallest(w)-rows, 0))
 }
 
 func (m *Model) stopRun() {

@@ -67,6 +67,10 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyDown}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
+	case "pgup":
+		return tea.KeyMsg{Type: tea.KeyPgUp}
+	case "pgdown":
+		return tea.KeyMsg{Type: tea.KeyPgDown}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
 	default:
@@ -775,6 +779,73 @@ func TestWaitingCountdownRenews(t *testing.T) {
 	}
 	if got := m.targets[0].active; got != 2*time.Minute {
 		t.Fatalf("active = %v, want 2m: the wait it left is still counted", got)
+	}
+}
+
+// TestTableSpansHalfAndScrolls pins the table window: it grows to half the
+// screen instead of stopping at eight rows, each column says when it is clipped,
+// and a page moves the window and stops at the end.
+func TestTableSpansHalfAndScrolls(t *testing.T) {
+	m := newModel()
+	m.width, m.height = 100, 24
+	for i := 0; i < 30; i++ {
+		m.list = append(m.list, saved{user: fmt.Sprintf("u%02d", i)})
+	}
+	m.syncRows()
+
+	rows, _, _ := m.budget(100, 24)
+	if rows != 11 {
+		t.Fatalf("rows = %d, want 11: half of 24, less the column header", rows)
+	}
+	lines := strings.Split(m.View(), "\n")
+	if !strings.Contains(lines[2], "idle 30 ▾") {
+		t.Fatalf("the idle column must say it is clipped below:\n%s", lines[2])
+	}
+	if !strings.Contains(lines[3], "@u00") {
+		t.Fatalf("the window must start at the first row:\n%s", lines[3])
+	}
+
+	m.Update(key("pgdown"))
+	lines = strings.Split(m.View(), "\n")
+	if strings.Contains(lines[3], "@u00") || !strings.Contains(lines[3], "@u11") {
+		t.Fatalf("pgdown must move the window one page:\n%s", lines[3])
+	}
+	if !strings.Contains(lines[2], "▴") {
+		t.Fatalf("the column must say it is clipped above:\n%s", lines[2])
+	}
+
+	for i := 0; i < 5; i++ {
+		m.Update(key("pgdown"))
+	}
+	lines = strings.Split(m.View(), "\n")
+	if !strings.Contains(lines[2], "idle 30 ▴") || strings.Contains(lines[2], "▾") {
+		t.Fatalf("the window must stop at the end:\n%s", lines[2])
+	}
+	if !strings.Contains(lines[13], "@u29") {
+		t.Fatalf("the last row must be on screen at the end:\n%s", lines[13])
+	}
+
+	m.Update(key("pgup"))
+	if got := strings.Split(m.View(), "\n")[3]; strings.Contains(got, "@u29") {
+		t.Fatalf("pgup must come back one page:\n%s", got)
+	}
+}
+
+// TestNarrowListScrolls proves the folded list scrolls too, with the visible
+// range in its title.
+func TestNarrowListScrolls(t *testing.T) {
+	m := newModel()
+	m.width, m.height = 60, 24
+	for i := 0; i < 30; i++ {
+		m.list = append(m.list, saved{user: fmt.Sprintf("u%02d", i)})
+	}
+	m.syncRows()
+	if got := strings.Split(m.View(), "\n")[2]; got != "targets 1-11 of 30" {
+		t.Fatalf("title = %q, want targets 1-11 of 30", got)
+	}
+	m.Update(key("pgdown"))
+	if got := strings.Split(m.View(), "\n")[2]; got != "targets 12-22 of 30" {
+		t.Fatalf("title after a page = %q, want targets 12-22 of 30", got)
 	}
 }
 

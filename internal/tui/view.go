@@ -37,7 +37,7 @@ var (
 const (
 	// phaseWidth is the phase column. The words are cue words, not Phase.String().
 	phaseWidth = 6
-	keysHint   = "enter submit · tab complete · /help · /quit exit"
+	keysHint   = "enter submit · tab complete · pgup/pgdn scroll · /help · /quit exit"
 	emptyState = "no targets yet · type a username below"
 
 	// colMinWidth is where three columns can still hold a cue, a clipped name
@@ -81,7 +81,7 @@ func (m *Model) View() string {
 			lines = append(lines, ghostStyle.Render(clip(emptyState, w)))
 		}
 	} else {
-		lines = append(lines, m.tableHead(w))
+		lines = append(lines, m.tableHead(rows, w))
 		lines = append(lines, m.tableBody(rows, w)...)
 	}
 	lines = append(lines, make([]string, spacer)...)
@@ -106,13 +106,13 @@ func (m *Model) View() string {
 	return strings.Join(lines, "\n")
 }
 
-// budget splits the height. The empty table keeps one row for its message; that
-// row comes out of the activity pane, never out of the fixed skeleton. The
-// activity pane is capped at half the screen, and whatever it does not take sits
-// between the table and the log, so the log stays pinned to the bottom.
+// budget splits the height. The table takes what it needs up to half the screen
+// and scrolls past that; the activity pane is capped at half too, and the lines
+// it does not take sit between the table and the log, so the log stays pinned to
+// the bottom. The empty table keeps one row for its message, out of the body.
 func (m *Model) budget(w, h int) (rows, activity, spacer int) {
 	body := max(h-7, 0)
-	rows = min(min(m.tallest(w), 8), max(body/3, 1))
+	rows = min(m.tallest(w), max(h/2-1, 1))
 	if len(m.targets) == 0 && h >= 8 {
 		rows = max(rows, 1)
 	}
@@ -231,21 +231,58 @@ func colWidth(w int) int {
 	return max((w-colGap*2)/3, 1)
 }
 
-// tableHead is the three column titles with their counts.
-func (m *Model) tableHead(w int) string {
+// tableHead is the three column titles with their counts, plus a cue when the
+// column scrolls.
+func (m *Model) tableHead(rows, w int) string {
 	if w < colMinWidth {
-		return ghostStyle.Render("targets")
-	}
-	var n [3]int
-	for _, t := range m.targets {
-		n[group(t)]++
+		return ghostStyle.Render(m.listTitle(rows))
 	}
 	colW := colWidth(w)
 	parts := make([]string, 0, len(colNames))
-	for i, name := range colNames {
-		parts = append(parts, padRight(ghostStyle.Render(fmt.Sprintf("%s %d", name, n[i])), colW))
+	for g, name := range colNames {
+		col := m.column(g)
+		off, end := m.win(len(col), rows)
+		title := fmt.Sprintf("%s %d", name, len(col))
+		if off > 0 {
+			title += " ▴"
+		}
+		if end < len(col) {
+			title += " ▾"
+		}
+		parts = append(parts, padRight(ghostStyle.Render(title), colW))
 	}
 	return strings.Join(parts, strings.Repeat(" ", colGap))
+}
+
+// listTitle is the single list's title, with the visible range when it scrolls.
+func (m *Model) listTitle(rows int) string {
+	off, end := m.win(len(m.targets), rows)
+	if off == 0 && end == len(m.targets) {
+		return "targets"
+	}
+	return fmt.Sprintf("targets %d-%d of %d", off+1, end, len(m.targets))
+}
+
+// column is one group's rows, in the order they were added.
+func (m *Model) column(g int) []target {
+	out := make([]target, 0, len(m.targets))
+	for _, t := range m.targets {
+		if group(t) == g {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// win is the visible slice [off:end) of total rows in a window of n rows, from
+// the scroll offset. A column shorter than the window shows all of itself, so
+// paging to the end lands on the end of every column.
+func (m *Model) win(total, n int) (off, end int) {
+	if n <= 0 {
+		return 0, 0
+	}
+	off = min(m.top, max(total-n, 0))
+	return off, min(off+n, total)
 }
 
 // tableBody renders the rows side by side, one column per group, or as the one
@@ -273,26 +310,14 @@ func (m *Model) tableBody(n, w int) []string {
 	return out
 }
 
-// colLines is one column: its rows, or the last one replaced by a count of what
-// did not fit. Short columns are padded so the caller can join them blindly.
+// colLines is one column's visible rows, padded so the caller can join the
+// columns blindly.
 func (m *Model) colLines(g, n, colW int) []string {
-	rows := make([]target, 0, n)
-	for _, t := range m.targets {
-		if group(t) == g {
-			rows = append(rows, t)
-		}
-	}
+	col := m.column(g)
+	off, end := m.win(len(col), n)
 	out := make([]string, 0, n)
-	switch {
-	case len(rows) > n:
-		for i := 0; i < n-1; i++ {
-			out = append(out, m.colRow(rows[i], colW))
-		}
-		out = append(out, ghostStyle.Render(fmt.Sprintf("+%d more", len(rows)-(n-1))))
-	default:
-		for _, t := range rows {
-			out = append(out, m.colRow(t, colW))
-		}
+	for _, t := range col[off:end] {
+		out = append(out, m.colRow(t, colW))
 	}
 	for len(out) < n {
 		out = append(out, "")
@@ -325,18 +350,12 @@ func (m *Model) targetLines(n, w int) []string {
 	nameW := min(max(m.nameNeed(), 8), max(w-fixed, 8))
 
 	out := make([]string, 0, n)
-	switch {
-	case len(m.targets) == 0:
+	if len(m.targets) == 0 {
 		out = append(out, ghostStyle.Render(clip(emptyState, w)))
-	case len(m.targets) > n:
-		for i := 0; i < n-1; i++ {
-			out = append(out, m.rowLine(m.targets[i], nameW, withSize))
-		}
-		out = append(out, ghostStyle.Render(fmt.Sprintf("+%d more", len(m.targets)-(n-1))))
-	default:
-		for i := 0; i < n; i++ {
-			out = append(out, m.rowLine(m.targets[i], nameW, withSize))
-		}
+	}
+	off, end := m.win(len(m.targets), n)
+	for _, t := range m.targets[off:end] {
+		out = append(out, m.rowLine(t, nameW, withSize))
 	}
 	for len(out) < n {
 		out = append(out, "")
