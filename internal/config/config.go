@@ -1,17 +1,22 @@
 // Package config holds the resolved run configuration shared by every mode.
 package config
 
+import "time"
+
 // Config is the full set of knobs one recorder run needs.
 type Config struct {
 	URL               string
 	User              string
 	RoomID            string
 	Once              bool // record a single attempt instead of waiting for the account to go live
-	AutomaticInterval int  // minutes between liveness polls
-	Duration          int  // minutes; 0 means no cap
-	OutputDir         string
-	FFmpegPath        string
-	Proxy             string
-	Cookies           map[string]string
-	UploadTelegram    bool
+	AutomaticInterval int  // minutes between liveness polls, the legacy knob; PollInterval wins
+	// PollInterval is the gap between two liveness polls of the whole pool: one
+	// target is polled per interval, however many targets the run has.
+	PollInterval   time.Duration
+	Duration       int // minutes; 0 means no cap
+	OutputDir      string
+	FFmpegPath     string
+	Proxy          string
+	Cookies        map[string]string
+	UploadTelegram bool
 }

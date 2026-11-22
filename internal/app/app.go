@@ -16,15 +16,20 @@ import (
 	"tokgo/internal/ui"
 )
 
-const (
-	connectionBackoff = 2 * time.Minute
-	streamStartGap    = 2500 * time.Millisecond
-)
+// liveness is the part of the TikTok client the run needs. *tiktok.Client
+// satisfies it, and tests substitute a fake to count polls.
+type liveness interface {
+	RoomIDForUser(context.Context, string) (string, error)
+	UserForRoomID(context.Context, string) (string, error)
+	UserAndRoomFromURL(context.Context, string) (string, string, error)
+	RoomStatus(context.Context, string) (tiktok.RoomStatus, error)
+	CountryBlocked(context.Context) (bool, error)
+}
 
 // Runner holds the wired dependencies for one program run.
 type Runner struct {
 	cfg     config.Config
-	lookup  *tiktok.Client // proxied when a proxy is configured
+	lookup  liveness       // proxied when a proxy is configured
 	stream  *tiktok.Client // always direct, for bulk transfer
 	rec     *record.Recorder
 	uploads telegram.Config
@@ -35,6 +40,7 @@ type Runner struct {
 	tasks  map[string]context.CancelFunc
 	errs   map[string]error // per-target result, for the single-target return path
 	multi  bool             // more than one target registered in this run
+	pool   *pool            // the run's shared poll pacer
 	// registered counts every successful launch, so a run only takes the
 	// multi-target path once a second target actually exists.
 	registered int
@@ -177,6 +183,11 @@ func (r *Runner) capture(ctx context.Context, target, user, roomID string) (stri
 	return path, nil
 }
 
+// automatic waits for the account to go live, records it, then waits again.
+// One poll costs two requests and every target of the run shares one pool, so
+// at most one target is polled per tick. A target that stays dark sleeps out
+// its backoff before taking a turn, which leaves the pool to the targets that
+// are worth a check.
 func (r *Runner) automatic(ctx context.Context, target string) (string, error) {
 	r.emit(Status{User: target, Phase: PhaseResolving})
 	user, _, err := r.resolve(ctx, target, r.cfg.RoomID)
@@ -187,10 +198,22 @@ func (r *Runner) automatic(ctx context.Context, target string) (string, error) {
 		return "", err
 	}
 
-	interval := time.Duration(r.cfg.AutomaticInterval) * time.Minute
+	tick := r.cfg.PollInterval
+	pool := r.currentPool()
 	file := ""
+	misses := 0
+	gap := time.Duration(0)
+	detail := ""
 	for {
-		r.emit(Status{User: target, Phase: PhaseWaiting})
+		r.emit(Status{User: target, Phase: PhaseWaiting, Detail: detail, Next: time.Now().Add(gap)})
+		if gap > 0 && !wait(ctx, "waiting for next stream..", gap) {
+			return file, nil
+		}
+		if !pool.next(ctx) {
+			return file, nil
+		}
+		detail = ""
+
 		roomID, err := r.lookup.RoomIDForUser(ctx, user)
 		if err == nil {
 			var status tiktok.RoomStatus
@@ -198,46 +221,45 @@ func (r *Runner) automatic(ctx context.Context, target string) (string, error) {
 			if err == nil && status.Live {
 				r.emit(Status{User: target, Phase: PhaseLive, Detail: roomID, RoomID: roomID})
 				logLive(user, roomID, status)
+				misses, gap = 0, 0
 				var path string
 				path, err = r.capture(ctx, target, user, roomID)
 				if path != "" {
 					file = path
 				}
-				if ctx.Err() == nil {
-					r.emit(Status{User: target, Phase: PhaseWaiting})
+				if err == nil {
+					if ctx.Err() != nil {
+						return file, nil
+					}
+					continue // a stream that just ended can come back at once
 				}
 			} else if err == nil {
 				err = tiktok.ErrNotLive
 			}
 		}
 
-		if err != nil {
-			if ctx.Err() != nil {
-				return file, nil
-			}
-			if tiktok.Transient(err) {
-				logx.Infof("@%s: %v", user, err)
-				r.emit(Status{User: target, Phase: PhaseWaiting, Detail: err.Error()})
-				if !wait(ctx, "waiting for next stream..", interval) {
-					return file, nil
-				}
-				continue
-			}
-			if tiktok.Fatal(err) {
-				return file, err
-			}
-			logx.Errorf("connection problem: %v", err)
-			r.emit(Status{User: target, Phase: PhaseWaiting, Detail: err.Error()})
-			if !wait(ctx, "connection lost, retrying..", connectionBackoff) {
-				return file, nil
-			}
-			continue
-		}
-
-		if !wait(ctx, "waiting for next stream..", interval) {
+		if ctx.Err() != nil {
 			return file, nil
 		}
+		if tiktok.Fatal(err) {
+			return file, err
+		}
+		if tiktok.Transient(err) {
+			logx.Infof("@%s: %v", user, err)
+		} else {
+			logx.Errorf("connection problem: %v", err)
+		}
+		detail = err.Error()
+		misses++
+		gap = backoffGap(tick, misses)
 	}
+}
+
+// currentPool is the poll pacer of the run in flight.
+func (r *Runner) currentPool() *pool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pool
 }
 
 // wait shows the poll or the retry on the spinner for the whole sleep.

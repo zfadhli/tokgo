@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"tokgo/internal/logx"
 	"tokgo/internal/record"
@@ -74,6 +75,10 @@ type Status struct {
 	RoomID string
 	File   string // output path, once capture has produced one
 	Bytes  int64  // bytes captured during the current capture
+	// Next is when this target's next poll is due. Only a waiting status
+	// carries one: a polled target is due at once, a dark one is waiting out
+	// its backoff, and a target that is recording has no poll scheduled.
+	Next time.Time
 }
 
 var (
@@ -132,7 +137,10 @@ func (r *Runner) supervise(ctx context.Context, users []string, work func(contex
 	r.multi = false
 	r.registered = 0
 	r.fails = 0
+	r.pool = newPool(r.cfg.PollInterval)
+	p := r.pool
 	r.mu.Unlock()
+	go p.serve(ctx)
 
 	seen := make(map[string]struct{}, len(users))
 	for _, user := range users {
@@ -158,6 +166,7 @@ func (r *Runner) supervise(ctx context.Context, users []string, work func(contex
 	r.tasks = nil
 	r.errs = nil
 	r.idle = nil
+	r.pool = nil
 	r.mu.Unlock()
 
 	if multi {
