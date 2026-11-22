@@ -85,6 +85,18 @@ func header(cfg config.Config, users []string) {
 	fmt.Println()
 }
 
+// pollGap is the pool tick the run uses. The legacy minute knob is the fallback
+// for a config built without the new field, so old callers keep their meaning.
+func pollGap(cfg config.Config) time.Duration {
+	switch {
+	case cfg.PollInterval > 0:
+		return cfg.PollInterval
+	case cfg.AutomaticInterval > 0:
+		return time.Duration(cfg.AutomaticInterval) * time.Minute
+	}
+	return 15 * time.Second
+}
+
 // targetLine splits what to record from how, so only the target is highlighted.
 func targetLine(cfg config.Config, users []string) (string, string) {
 	target := "room " + cfg.RoomID
@@ -94,7 +106,7 @@ func targetLine(cfg config.Config, users []string) (string, string) {
 	case len(users) > 0:
 		target = "@" + strings.Join(users, ",")
 	}
-	mode := fmt.Sprintf("wait for live, poll %dmin", cfg.AutomaticInterval)
+	mode := "wait for live, poll " + ui.Duration(pollGap(cfg))
 	if cfg.Once {
 		mode = "record once"
 	}

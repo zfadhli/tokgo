@@ -7,6 +7,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 
@@ -27,7 +28,7 @@ var tikTokURL = regexp.MustCompile(`^.*www\.tiktok\.com.*$|^.*vm\.tiktok\.com.*$
 // name there, which normalize rewrites into the double-dash form pflag parses.
 type flags struct {
 	url, user, roomID, proxy, output, ffmpeg string
-	interval, duration                       int
+	interval, poll, duration                 int
 	once, telegram, noUpdateCheck            bool
 }
 
@@ -38,7 +39,8 @@ func bind(fs *pflag.FlagSet) *flags {
 	fs.StringVarP(&f.user, "user", "u", "", "username, or a comma-separated list of usernames")
 	fs.StringVar(&f.roomID, "room_id", "", "TikTok room id")
 	fs.BoolVar(&f.once, "once", false, "record a single attempt instead of waiting for the account to go live")
-	fs.IntVar(&f.interval, "automatic_interval", 3, "minutes between liveness checks")
+	fs.IntVar(&f.interval, "automatic_interval", 3, "legacy: minutes between liveness checks, overrides -poll_interval")
+	fs.IntVar(&f.poll, "poll_interval", 15, "seconds between liveness polls, shared by every target")
 	fs.StringVar(&f.proxy, "proxy", "", "proxy url for requests")
 	fs.StringVarP(&f.output, "output", "o", "", "directory for recordings")
 	fs.IntVar(&f.duration, "duration", 0, "recording length cap in minutes, 0 means no cap")
@@ -72,6 +74,9 @@ func (f *flags) parsed() (Parsed, error) {
 	if f.interval < 1 {
 		return Parsed{}, errors.New("-automatic_interval must be at least 1 minute")
 	}
+	if f.poll < 1 {
+		return Parsed{}, errors.New("-poll_interval must be at least 1 second")
+	}
 	if f.duration < 0 {
 		return Parsed{}, errors.New("-duration cannot be negative")
 	}
@@ -83,6 +88,7 @@ func (f *flags) parsed() (Parsed, error) {
 			RoomID:            f.roomID,
 			Once:              f.once,
 			AutomaticInterval: f.interval,
+			PollInterval:      time.Duration(f.poll) * time.Second,
 			Duration:          f.duration,
 			OutputDir:         f.output,
 			FFmpegPath:        f.ffmpeg,
@@ -104,7 +110,16 @@ func Parse(args []string) (Parsed, error) {
 	if err := fs.Parse(normalize(args, fs)); err != nil {
 		return Parsed{}, err
 	}
-	return f.parsed()
+	p, err := f.parsed()
+	if err != nil {
+		return Parsed{}, err
+	}
+	// The legacy flag keeps its meaning for scripts that pass it: a minute gap
+	// per poll, which becomes the pool tick. An explicit -poll_interval wins.
+	if fs.Changed("automatic_interval") && !fs.Changed("poll_interval") {
+		p.Config.PollInterval = time.Duration(f.interval) * time.Minute
+	}
+	return p, nil
 }
 
 // normalize rewrites the reference CLI's single-dash long flags (-user) into

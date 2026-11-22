@@ -6,11 +6,15 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"tokgo/internal/config"
 )
 
 func want(cfg config.Config, users []string, updateCheck bool) *Parsed {
+	if cfg.PollInterval == 0 {
+		cfg.PollInterval = 15 * time.Second // the flag default
+	}
 	return &Parsed{Config: cfg, Users: users, UpdateCheck: updateCheck}
 }
 
@@ -114,6 +118,34 @@ func TestParse(t *testing.T) {
 			wantErr: "-automatic_interval must be at least 1 minute",
 		},
 		{
+			name: "legacy automatic interval becomes the pool tick",
+			args: []string{"-user", "x", "-automatic_interval", "2"},
+			want: want(config.Config{
+				User:              "x",
+				AutomaticInterval: 2,
+				PollInterval:      2 * time.Minute,
+			}, []string{"x"}, true),
+		},
+		{
+			name: "poll interval wins over the legacy flag",
+			args: []string{"-user", "x", "-automatic_interval", "2", "-poll_interval", "20"},
+			want: want(config.Config{
+				User:              "x",
+				AutomaticInterval: 2,
+				PollInterval:      20 * time.Second,
+			}, []string{"x"}, true),
+		},
+		{
+			name: "poll interval accepted",
+			args: []string{"-user", "x", "-poll_interval", "5"},
+			want: want(config.Config{User: "x", AutomaticInterval: 3, PollInterval: 5 * time.Second}, []string{"x"}, true),
+		},
+		{
+			name:    "poll interval zero rejected",
+			args:    []string{"-user", "x", "-poll_interval", "0"},
+			wantErr: "-poll_interval must be at least 1 second",
+		},
+		{
 			name: "duration accepted",
 			args: []string{"-user", "x", "-duration", "30"},
 			want: want(config.Config{User: "x", AutomaticInterval: 3, Duration: 30}, []string{"x"}, true),
@@ -130,7 +162,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name: "record once",
-			args: []string{"-user", "x", "-once", "-automatic_interval", "3"},
+			args: []string{"-user", "x", "-once"},
 			want: want(config.Config{User: "x", Once: true, AutomaticInterval: 3}, []string{"x"}, true),
 		},
 		{
