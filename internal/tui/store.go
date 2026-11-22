@@ -26,12 +26,15 @@ func settingsFile() string { return configPath("settings.json") }
 // storedSettings is the on-disk shape of the input-line knobs. Zero values are
 // the defaults, so they stay out of the file.
 type storedSettings struct {
-	Once     bool   `json:"once,omitempty"`
-	Duration int    `json:"duration,omitempty"`
-	Interval int    `json:"interval,omitempty"`
-	Output   string `json:"output,omitempty"`
-	Proxy    string `json:"proxy,omitempty"`
-	Telegram bool   `json:"telegram,omitempty"`
+	Once     bool `json:"once,omitempty"`
+	Duration int  `json:"duration,omitempty"`
+	// Interval is the 0.2.x knob, in minutes. Read only: it keeps a file from
+	// that release usable, and nothing ever writes it back.
+	Interval    int    `json:"interval,omitempty"`
+	PollSeconds int    `json:"poll_seconds,omitempty"`
+	Output      string `json:"output,omitempty"`
+	Proxy       string `json:"proxy,omitempty"`
+	Telegram    bool   `json:"telegram,omitempty"`
 }
 
 // readSettings reads the saved knobs. A missing file is the defaults, not an

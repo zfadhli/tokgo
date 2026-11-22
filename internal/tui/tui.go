@@ -22,6 +22,7 @@ import (
 	"tokgo/internal/config"
 	"tokgo/internal/logx"
 	"tokgo/internal/telegram"
+	"tokgo/internal/ui"
 )
 
 // maxLogLines bounds the retained scrollback; the view only ever shows the tail.
@@ -30,6 +31,10 @@ const maxLogLines = 2000
 // autoStagger is the gap between two autostart targets, so opening the screen
 // does not fire every liveness lookup from one address at once.
 const autoStagger = 10 * time.Second
+
+// defaultPoll is the pool tick the flags default to, in seconds. The screen
+// keeps the same default, so a saved file with no knob and a bare launch agree.
+const defaultPoll = 15
 
 type logLine struct {
 	level string
@@ -56,6 +61,7 @@ type target struct {
 	phase  app.Phase
 	bytes  int64
 	since  time.Time     // when the current phase started
+	next   time.Time     // when this target's next liveness poll is due, waiting only
 	active time.Duration // time spent in active phases, kept for the terminal row
 	idle   bool          // saved, not part of any run
 	auto   bool          // saved to start on its own when the screen opens
@@ -65,7 +71,7 @@ type target struct {
 type settings struct {
 	once     bool
 	duration int
-	interval int
+	poll     int // seconds between liveness polls, the pool tick
 	output   string
 	proxy    string
 	telegram bool
@@ -110,7 +116,7 @@ type Model struct {
 	logs         []logLine
 	started      time.Time
 	ended        time.Time
-	runInterval  time.Duration // the in-flight run's poll interval, not next-run settings
+	runPoll      time.Duration // the in-flight run's pool tick, not next-run settings
 	finishing    bool
 	quitAfter    bool // a quit is waiting for the run to remux and return
 	result       error
@@ -130,15 +136,15 @@ type Model struct {
 // New builds the one screen with the defaults the flags would give.
 func New(version string, uploads telegram.Config, cookies map[string]string, in <-chan event) *Model {
 	m := &Model{
-		version:     version,
-		uploads:     uploads,
-		cookies:     cookies,
-		in:          in,
-		now:         time.Now(),
-		settings:    settings{interval: 3},
-		runInterval: 3 * time.Minute,
-		byName:      make(map[string]int),
-		makeRunner:  defaultRunner,
+		version:    version,
+		uploads:    uploads,
+		cookies:    cookies,
+		in:         in,
+		now:        time.Now(),
+		settings:   settings{poll: defaultPoll},
+		runPoll:    defaultPoll * time.Second,
+		byName:     make(map[string]int),
+		makeRunner: defaultRunner,
 	}
 	m.input = textinput.New()
 	m.input.Prompt = "› "
@@ -384,7 +390,12 @@ func (m *Model) launch(names []string) error {
 	m.users = parsed.Users
 	m.started = now
 	m.now = now
-	m.runInterval = time.Duration(cfg.AutomaticInterval) * time.Minute
+	m.runPoll = cfg.PollInterval
+	if m.runPoll <= 0 {
+		// An unset tick is the pool's own default, so the row countdown and the
+		// header agree with the runner instead of reading zero seconds.
+		m.runPoll = defaultPoll * time.Second
+	}
 	m.ended = time.Time{}
 	m.finishing = false
 	m.result = nil
@@ -480,7 +491,7 @@ func (m *Model) writeList() {
 // savedSettings is the stored knobs with the limits the flags enforce applied,
 // so a hand-edited file cannot make a launch fail.
 func (m *Model) savedSettings() settings {
-	out := settings{interval: 3}
+	out := settings{poll: defaultPoll}
 	saved, err := readSettings(m.settingsPath)
 	if err != nil {
 		m.warn("settings.json: " + err.Error())
@@ -488,12 +499,19 @@ func (m *Model) savedSettings() settings {
 	}
 	out.once = saved.Once
 	out.duration = saved.Duration
-	out.interval = saved.Interval
+	// A file written by 0.2.x holds minutes in Interval; anything newer holds
+	// seconds in PollSeconds, which wins so a stale legacy key cannot override.
+	switch {
+	case saved.PollSeconds > 0:
+		out.poll = saved.PollSeconds
+	case saved.Interval > 0:
+		out.poll = saved.Interval * 60
+	}
 	out.output = saved.Output
 	out.proxy = saved.Proxy
 	out.telegram = saved.Telegram
-	if out.interval < 1 {
-		out.interval = 3
+	if out.poll < 1 {
+		out.poll = defaultPoll
 	}
 	if out.duration < 0 {
 		out.duration = 0
@@ -504,12 +522,12 @@ func (m *Model) savedSettings() settings {
 // saveSettings writes the knobs back after a command changes them.
 func (m *Model) saveSettings() {
 	err := writeSettings(m.settingsPath, storedSettings{
-		Once:     m.settings.once,
-		Duration: m.settings.duration,
-		Interval: m.settings.interval,
-		Output:   m.settings.output,
-		Proxy:    m.settings.proxy,
-		Telegram: m.settings.telegram,
+		Once:        m.settings.once,
+		Duration:    m.settings.duration,
+		PollSeconds: m.settings.poll,
+		Output:      m.settings.output,
+		Proxy:       m.settings.proxy,
+		Telegram:    m.settings.telegram,
 	})
 	if err != nil {
 		m.warn("cannot save the settings: " + err.Error())
@@ -620,7 +638,7 @@ func (m *Model) dropRow(user string) {
 // showConfig prints what the next run would use. The live run keeps the values
 // it started with, so it says so rather than pretending they changed.
 func (m *Model) showConfig() {
-	mode := fmt.Sprintf("wait for live, poll %d min", m.settings.interval)
+	mode := fmt.Sprintf("wait for live, poll %s", ui.Duration(time.Duration(m.settings.poll)*time.Second))
 	if m.settings.once {
 		mode = "record once"
 	}
@@ -812,7 +830,7 @@ var commands = []command{
 	{"once", "", "record one session per target"},
 	{"wait", "", "wait for the next stream (default)"},
 	{"duration", "<min>", "cap each session in minutes, 0 = no cap"},
-	{"interval", "<min>", "minutes between liveness polls, minimum 1"},
+	{"interval", "<sec>", "seconds between liveness polls, minimum 1"},
 	{"output", "<dir>", "output directory"},
 	{"proxy", "<url>", "proxy for lookups, alone clears it"},
 	{"telegram", "on|off", "upload each recording when it is written"},
@@ -967,8 +985,8 @@ func (m *Model) command(line string) tea.Cmd {
 			m.settings.duration = cfg.Duration
 		})
 	case "interval":
-		m.applySetting("-automatic_interval", rest, "interval", func(cfg config.Config) {
-			m.settings.interval = cfg.AutomaticInterval
+		m.applySetting("-poll_interval", rest, "interval", func(cfg config.Config) {
+			m.settings.poll = int(cfg.PollInterval / time.Second)
 		})
 	case "output":
 		m.applySetting("-output", rest, "", func(cfg config.Config) {
@@ -1149,6 +1167,13 @@ func (m *Model) applyStatus(s app.Status) tea.Cmd {
 	}
 	t := &m.targets[i]
 	t.idle = false
+	// Only a waiting panel has a due time; every other phase clears it, so a row
+	// that went live or ended cannot keep an old countdown.
+	if s.Phase == app.PhaseWaiting {
+		t.next = s.Next
+	} else {
+		t.next = time.Time{}
+	}
 	// A poll cycle announces waiting again after every failed check, so a repeat
 	// of the same phase restarts the countdown instead of leaving it at zero.
 	if t.phase != s.Phase || s.Phase == app.PhaseWaiting {
@@ -1231,8 +1256,8 @@ func (m *Model) argv(names []string) []string {
 		args = append(args, "-user", names[0])
 	}
 	args = append(args, "-duration", strconv.Itoa(m.settings.duration))
-	if m.settings.interval != 3 {
-		args = append(args, "-automatic_interval", strconv.Itoa(m.settings.interval))
+	if m.settings.poll != defaultPoll {
+		args = append(args, "-poll_interval", strconv.Itoa(m.settings.poll))
 	}
 	if m.settings.output != "" {
 		args = append(args, "-output", m.settings.output)

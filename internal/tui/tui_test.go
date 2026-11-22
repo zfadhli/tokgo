@@ -128,7 +128,7 @@ func (f *fakeCtrl) DropUser(user string) bool {
 
 // TestArgv checks the settings render the exact flags the CLI takes.
 func TestArgv(t *testing.T) {
-	base := settings{interval: 3}
+	base := settings{poll: 15}
 	cases := []struct {
 		name  string
 		set   settings
@@ -164,13 +164,13 @@ func TestArgv(t *testing.T) {
 			set: settings{
 				once:     true,
 				duration: 10,
-				interval: 5,
+				poll:     5,
 				output:   "/tmp/rec",
 				proxy:    "socks5://127.0.0.1:1080",
 				telegram: true,
 			},
 			names: []string{"someone"},
-			want: []string{"-once", "-user", "someone", "-duration", "10", "-automatic_interval", "5",
+			want: []string{"-once", "-user", "someone", "-duration", "10", "-poll_interval", "5",
 				"-output", "/tmp/rec", "-proxy", "socks5://127.0.0.1:1080", "-telegram"},
 		},
 	}
@@ -200,7 +200,7 @@ func TestMultiTargetArgvParses(t *testing.T) {
 }
 
 func TestSettingsCommands(t *testing.T) {
-	base := settings{interval: 3}
+	base := settings{poll: 15}
 	cases := []struct {
 		name    string
 		start   settings
@@ -208,18 +208,18 @@ func TestSettingsCommands(t *testing.T) {
 		want    settings
 		wantLog string
 	}{
-		{"once", base, "/once", settings{interval: 3, once: true}, ""},
-		{"wait", settings{interval: 3, once: true}, "/wait", base, ""},
-		{"duration", base, "/duration 12", settings{interval: 3, duration: 12}, ""},
+		{"once", base, "/once", settings{poll: 15, once: true}, ""},
+		{"wait", settings{poll: 15, once: true}, "/wait", base, ""},
+		{"duration", base, "/duration 12", settings{poll: 15, duration: 12}, ""},
 		{"duration rejects text", base, "/duration x", base, "invalid argument"},
 		{"duration rejects negative", base, "/duration -1", base, "-duration cannot be negative"},
-		{"interval", base, "/interval 7", settings{interval: 7}, ""},
-		{"interval rejects zero", base, "/interval 0", base, "-automatic_interval must be at least 1 minute"},
-		{"output", base, "/output /tmp/rec", settings{interval: 3, output: "/tmp/rec"}, ""},
-		{"proxy", base, "/proxy socks5://127.0.0.1:1080", settings{interval: 3, proxy: "socks5://127.0.0.1:1080"}, ""},
-		{"proxy alone clears", settings{interval: 3, proxy: "socks5://127.0.0.1:1080"}, "/proxy", base, ""},
-		{"telegram on", base, "/telegram on", settings{interval: 3, telegram: true}, ""},
-		{"telegram off", settings{interval: 3, telegram: true}, "/telegram off", base, ""},
+		{"interval", base, "/interval 7", settings{poll: 7}, ""},
+		{"interval rejects zero", base, "/interval 0", base, "-poll_interval must be at least 1 second"},
+		{"output", base, "/output /tmp/rec", settings{poll: 15, output: "/tmp/rec"}, ""},
+		{"proxy", base, "/proxy socks5://127.0.0.1:1080", settings{poll: 15, proxy: "socks5://127.0.0.1:1080"}, ""},
+		{"proxy alone clears", settings{poll: 15, proxy: "socks5://127.0.0.1:1080"}, "/proxy", base, ""},
+		{"telegram on", base, "/telegram on", settings{poll: 15, telegram: true}, ""},
+		{"telegram off", settings{poll: 15, telegram: true}, "/telegram off", base, ""},
 		{"unknown", base, "/nope", base, "unknown command /nope"},
 		{"help", base, "/help", base, "/duration"},
 	}
@@ -235,6 +235,23 @@ func TestSettingsCommands(t *testing.T) {
 				t.Fatalf("activity missing %q:\n%s", tc.wantLog, logText(m))
 			}
 		})
+	}
+}
+
+// TestIntervalTakesSeconds pins the unit: /interval reads seconds and renders
+// the pool flag, so the value the command validated is the value the run gets.
+func TestIntervalTakesSeconds(t *testing.T) {
+	m := newModel()
+	submit(m, "/interval 20")
+	if m.settings.poll != 20 {
+		t.Fatalf("poll = %d, want 20 seconds", m.settings.poll)
+	}
+	got := strings.Join(m.argv([]string{"alpha"}), " ")
+	if !strings.Contains(got, "-poll_interval 20") {
+		t.Fatalf("argv = %q, want -poll_interval 20", got)
+	}
+	if strings.Contains(got, "-automatic_interval") {
+		t.Fatalf("argv still carries the legacy flag: %q", got)
 	}
 }
 
@@ -267,7 +284,7 @@ func TestBareEntryStartsARun(t *testing.T) {
 	if m.ctrl != ctrl {
 		t.Fatal("the runner was not installed")
 	}
-	if got.Once || got.Duration != 0 || got.AutomaticInterval != 3 {
+	if got.Once || got.Duration != 0 || got.PollInterval != 15*time.Second {
 		t.Fatalf("runner config = %+v", got)
 	}
 	if !slices.Equal(m.users, []string{"alpha", "beta"}) {
@@ -310,12 +327,12 @@ func TestAddCommandUsesTheTargetPath(t *testing.T) {
 
 func TestBareEntryReportsLaunchErrors(t *testing.T) {
 	m := newModel()
-	m.settings.interval = 0
+	m.settings.poll = 0
 	submit(m, "alpha")
 	if m.ctrl != nil {
 		t.Fatal("a rejected run must not install a runner")
 	}
-	if got := logText(m); !strings.Contains(got, "-automatic_interval must be at least 1 minute") {
+	if got := logText(m); !strings.Contains(got, "-poll_interval must be at least 1 second") {
 		t.Fatalf("CLI error missing from activity:\n%s", got)
 	}
 }
@@ -577,8 +594,8 @@ func TestTerminalClockKeepsTheWholeRun(t *testing.T) {
 
 func TestWaitingShowsTheCountdown(t *testing.T) {
 	m := newModel()
-	m.runInterval = 3 * time.Minute
-	m.settings.interval = 10 // a change for the next run must not move this one
+	m.runPoll = 3 * time.Minute
+	m.settings.poll = 600 // a change for the next run must not move this one
 	m.applyStatus(app.Status{User: "a", Phase: app.PhaseWaiting})
 	m.now = m.now.Add(30 * time.Second)
 	if got := m.timer(m.targets[0]); got != "-02:30" {
@@ -650,6 +667,42 @@ func TestHeaderNamesTheRunState(t *testing.T) {
 				t.Fatalf("header missing %q:\n%s", tc.want, v)
 			}
 		})
+	}
+}
+
+// TestHeaderShowsPoolCadence proves the shared cadence is visible while a run
+// is in flight, in a compressed form on a narrow terminal, and absent when no
+// row is waiting for a poll.
+func TestHeaderShowsPoolCadence(t *testing.T) {
+	m := newModel()
+	m.width, m.height = 100, 24
+	m.ctrl = &fakeCtrl{}
+	m.started = m.now
+	m.runPoll = 15 * time.Second
+	m.applyStatus(app.Status{User: "a", Phase: app.PhaseRecording})
+	m.applyStatus(app.Status{User: "b", Phase: app.PhaseWaiting, Next: m.now.Add(47 * time.Second)})
+	head := strings.Split(m.View(), "\n")[0]
+	for _, want := range []string{"1 recording", "2 targets", "poll 15s", "1 waiting", "00:00"} {
+		if !strings.Contains(head, want) {
+			t.Fatalf("header missing %q:\n%s", want, head)
+		}
+	}
+
+	m.width = 60
+	head = strings.Split(m.View(), "\n")[0]
+	if !strings.Contains(head, "1/2 · 15s · 1 · 00:00") {
+		t.Fatalf("narrow header = %q, want the compressed cadence", head)
+	}
+	if got := lipgloss.Width(head); got > 60 {
+		t.Fatalf("narrow header is %d wide", got)
+	}
+
+	none := newModel()
+	none.ctrl = &fakeCtrl{}
+	none.started = none.now
+	none.applyStatus(app.Status{User: "a", Phase: app.PhaseRecording})
+	if got := strings.Split(none.View(), "\n")[0]; strings.Contains(got, "poll") || strings.Contains(got, "waiting") {
+		t.Fatalf("no waiting row means no poll segment: %q", got)
 	}
 }
 
@@ -762,23 +815,52 @@ func TestActivityPaneStaysHalf(t *testing.T) {
 }
 
 // TestWaitingCountdownRenews pins the poll countdown: the runner announces
-// waiting again after every failed check, so the timer restarts instead of
-// sitting at -00:00 for the rest of the run.
+// waiting again before every poll, carrying that target's due time, so the
+// timer restarts instead of sitting at -00:00 for the rest of the run.
 func TestWaitingCountdownRenews(t *testing.T) {
 	m := newModel()
-	m.runInterval = 3 * time.Minute
-	m.applyStatus(app.Status{User: "a", Phase: app.PhaseWaiting})
-	m.now = m.now.Add(2 * time.Minute)
-	if got := m.timer(m.targets[0]); got != "-01:00" {
-		t.Fatalf("countdown = %q, want -01:00", got)
+	m.runPoll = 15 * time.Second
+	m.applyStatus(app.Status{User: "a", Phase: app.PhaseWaiting, Next: m.now.Add(time.Minute)})
+	m.now = m.now.Add(20 * time.Second)
+	if got := m.timer(m.targets[0]); got != "-00:40" {
+		t.Fatalf("countdown = %q, want -00:40", got)
 	}
 
-	m.applyStatus(app.Status{User: "a", Phase: app.PhaseWaiting, Detail: "not live"})
-	if got := m.timer(m.targets[0]); got != "-03:00" {
+	m.applyStatus(app.Status{User: "a", Phase: app.PhaseWaiting, Detail: "not live", Next: m.now.Add(2 * time.Minute)})
+	if got := m.timer(m.targets[0]); got != "-02:00" {
 		t.Fatalf("the countdown did not renew: %q", got)
 	}
-	if got := m.targets[0].active; got != 2*time.Minute {
-		t.Fatalf("active = %v, want 2m: the wait it left is still counted", got)
+	if got := m.targets[0].active; got != 20*time.Second {
+		t.Fatalf("active = %v, want 20s: the wait it left is still counted", got)
+	}
+}
+
+// TestWaitingCountsDownToTheNextPoll proves the row counts to its own due time
+// and clamps at zero while the pool turn is late, falling back to the pool tick
+// before the first due time has arrived.
+func TestWaitingCountsDownToTheNextPoll(t *testing.T) {
+	m := newModel()
+	m.runPoll = 15 * time.Second
+
+	m.applyStatus(app.Status{User: "a", Phase: app.PhaseWaiting})
+	if got := m.timer(m.targets[0]); got != "-00:15" {
+		t.Fatalf("no due time must fall back to the pool tick: %q", got)
+	}
+
+	m.applyStatus(app.Status{User: "a", Phase: app.PhaseWaiting, Next: m.now.Add(8 * time.Second)})
+	m.now = m.now.Add(3 * time.Second)
+	if got := m.timer(m.targets[0]); got != "-00:05" {
+		t.Fatalf("countdown = %q, want -00:05", got)
+	}
+
+	m.now = m.now.Add(30 * time.Second) // the turn is late, the row holds at zero
+	if got := m.timer(m.targets[0]); got != "-00:00" {
+		t.Fatalf("a late poll must clamp at zero: %q", got)
+	}
+
+	m.applyStatus(app.Status{User: "a", Phase: app.PhaseRecording})
+	if got := m.targets[0].next; !got.IsZero() {
+		t.Fatalf("next = %v, want zero once the target is live", got)
 	}
 }
 
@@ -873,6 +955,17 @@ func TestLayoutFitsTheTerminal(t *testing.T) {
 			for _, user := range []string{"a", "b", "c", "d", "e", "f"} {
 				m.applyStatus(app.Status{User: user, Phase: app.PhaseRecording, Bytes: 1048000, File: "/out/" + user + ".mp4"})
 			}
+			return m
+		}},
+		{"waiting pool", func() *Model {
+			m := newModel()
+			m.ctrl = &fakeCtrl{}
+			m.started = m.now
+			m.runPoll = 15 * time.Second
+			for i, user := range []string{"a", "b", "c"} {
+				m.applyStatus(app.Status{User: user, Phase: app.PhaseWaiting, Next: m.now.Add(time.Duration(i+1) * 15 * time.Second)})
+			}
+			m.applyStatus(app.Status{User: "live", Phase: app.PhaseRecording, Bytes: 1048000, File: "/out/live.mp4"})
 			return m
 		}},
 		{"finished", func() *Model {
@@ -1659,7 +1752,7 @@ func TestConfigShowsTheNextRun(t *testing.T) {
 	submit(m, "/config")
 	logs := logText(m)
 	for _, want := range []string{
-		"wait for live, poll 3 min",
+		"wait for live, poll 15s",
 		"12 min",
 		"(default)",
 		"socks5://127.0.0.1:1080",
@@ -1737,7 +1830,7 @@ func TestSettingsSurviveTheSession(t *testing.T) {
 
 	next := newModel()
 	next.loadSaved()
-	want := settings{once: true, duration: 45, interval: 7, output: out, proxy: "socks5://127.0.0.1:1080", telegram: true}
+	want := settings{once: true, duration: 45, poll: 7, output: out, proxy: "socks5://127.0.0.1:1080", telegram: true}
 	if next.settings != want {
 		t.Fatalf("settings = %+v, want %+v", next.settings, want)
 	}
@@ -1758,7 +1851,7 @@ func TestSettingsSurviveTheSession(t *testing.T) {
 
 func TestSettingsFileRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "settings.json")
-	in := storedSettings{Output: "/mnt/c/x", Interval: 7, Telegram: true}
+	in := storedSettings{Output: "/mnt/c/x", PollSeconds: 7, Telegram: true}
 	if err := writeSettings(path, in); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -1798,9 +1891,41 @@ func TestSavedSettingsRespectTheFlagLimits(t *testing.T) {
 
 	m := newModel()
 	m.loadSaved()
-	want := settings{interval: 3, output: "/tmp/rec"}
+	want := settings{poll: 15, output: "/tmp/rec"}
 	if m.settings != want {
 		t.Fatalf("settings = %+v, want %+v", m.settings, want)
+	}
+}
+
+// TestLegacySettingsMigrate keeps a 0.2.x file usable: minutes in the old key
+// load as seconds, and the next save writes the seconds key alone.
+func TestLegacySettingsMigrate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "tokgo", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"interval": 3}`), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	m := newModel()
+	m.loadSaved()
+	if got := m.settings.poll; got != 180 {
+		t.Fatalf("poll = %d, want 180 seconds: a 3 minute interval", got)
+	}
+
+	submit(m, "/duration 5") // any settings command rewrites the file
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(body), `"poll_seconds": 180`) {
+		t.Fatalf("the file must record the migrated seconds: %s", body)
+	}
+	if strings.Contains(string(body), `"interval"`) {
+		t.Fatalf("the legacy field must not be written again: %s", body)
 	}
 }
 
@@ -1817,7 +1942,7 @@ func TestBrokenSettingsFileFallsBackToTheDefaults(t *testing.T) {
 
 	m := newModel()
 	m.loadSaved()
-	if m.settings != (settings{interval: 3}) {
+	if m.settings != (settings{poll: 15}) {
 		t.Fatalf("settings = %+v, want the defaults", m.settings)
 	}
 	if got := logText(m); !strings.Contains(got, "settings.json") {

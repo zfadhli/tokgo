@@ -134,10 +134,13 @@ func (m *Model) header(w int) string {
 
 func (m *Model) headerRight(w int) string {
 	if m.ctrl != nil {
-		recording := 0
+		recording, waiting := 0, 0
 		for _, t := range m.targets {
 			if t.phase == app.PhaseRecording {
 				recording++
+			}
+			if t.phase == app.PhaseWaiting {
+				waiting++
 			}
 		}
 		dot := hintStyle.Render("●")
@@ -148,9 +151,21 @@ func (m *Model) headerRight(w int) string {
 		if m.finishing {
 			lead = warnStyle.Render("stopping") + hintStyle.Render(" · ")
 		}
-		summary := fmt.Sprintf("%d recording · %d targets · %s", recording, len(m.targets), ui.Clock(m.clock()))
+		// The pool cadence only earns its width while rows queue for a turn; with
+		// nothing waiting the line stays what it always was.
+		cadence := ui.Duration(m.runPoll)
+		clock := ui.Clock(m.clock())
+		summary := fmt.Sprintf("%d recording · %d targets", recording, len(m.targets))
+		if waiting > 0 {
+			summary += fmt.Sprintf(" · poll %s · %d waiting", cadence, waiting)
+		}
+		summary += " · " + clock
 		if w < 64 {
-			summary = fmt.Sprintf("%d/%d · %s", recording, len(m.targets), ui.Clock(m.clock()))
+			summary = fmt.Sprintf("%d/%d", recording, len(m.targets))
+			if waiting > 0 {
+				summary += fmt.Sprintf(" · %s · %d", cadence, waiting)
+			}
+			summary += " · " + clock
 		}
 		return lead + dot + " " + hintStyle.Render(summary)
 	}
@@ -437,7 +452,15 @@ func (m *Model) timer(t target) string {
 	case t.idle:
 		return ""
 	case t.phase == app.PhaseWaiting:
-		left := m.runInterval - now.Sub(t.since)
+		// The runner names this target's own due time before every poll, so the
+		// row counts to its turn in the pool; with no due time yet, the pool tick
+		// from the moment the wait began is the best guess.
+		left := m.runPoll
+		if t.next.IsZero() {
+			left -= now.Sub(t.since)
+		} else {
+			left = t.next.Sub(now)
+		}
 		if left < 0 {
 			left = 0
 		}
