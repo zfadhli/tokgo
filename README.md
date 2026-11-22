@@ -30,7 +30,7 @@ written. Press it twice to abort immediately and keep the raw `.ts` segments.
 ## What a run looks like
 
 ```text
-tokgo v0.2.2 — TikTok LIVE recorder
+tokgo v0.3.0 — TikTok LIVE recorder
 https://github.com/zfadhli/tokgo · MIT License
 
   target  @skynews · record once
@@ -68,7 +68,8 @@ and motion: a spinner prints once as `o recording..` and the tags stay plain.
 | `-user <NAMES>`, `-u` | Username(s), comma separated, `@` optional |
 | `-room_id <ID>` | Numeric room id, bypasses username resolution |
 | `-once` | Record a single attempt instead of waiting for the account to go live |
-| `-automatic_interval <MIN>` | Minutes between liveness polls (default 3, minimum 1) |
+| `-poll_interval <SEC>` | Seconds between liveness polls, shared by every target (default 15, minimum 1) |
+| `-automatic_interval <MIN>` | Legacy: minutes between liveness polls; overrides `-poll_interval` when passed |
 | `-duration <MINUTES>` | Total capture budget per session, 0 for no cap |
 | `-output <DIR>`, `-o` | Output directory (default: current directory) |
 | `-proxy <URL>` | HTTP proxy for lookups; the video transfer always goes direct |
@@ -84,9 +85,20 @@ usernames record concurrently in whichever mode is selected.
 
 ## Modes
 
-By default the run polls the user every `-automatic_interval` minutes and
-records each session it catches, forever. A recording lasts until the stream
-ends, the room goes offline, `-duration` is reached, or you press Ctrl-C.
+By default the run keeps one poll in flight at a time, from a pool of every
+target, at most one poll per `-poll_interval` seconds (15 by default). The rate
+therefore does not grow with the number of targets: fifty names cost the same
+requests per minute as one. A target that stays offline backs off after each
+missed check, from one tick to fifteen minutes, so a pool of mostly dark names
+is nearly free; a target that just streamed is checked again at once. Each check
+is two lookups, a room id and a room status.
+
+That fifteen minute ceiling bounds detection latency when an account goes live,
+so lower `-poll_interval` to catch the first minutes of a stream at the price of
+more requests.
+
+A recording lasts until the stream ends, the room goes offline, `-duration` is
+reached, or you press Ctrl-C.
 
 `-once` resolves the room once, checks that it is live, records that one session
 and exits. It is the mode to use when you already know the stream is up.
@@ -102,10 +114,12 @@ tokgo tui
 
 One screen, like a terminal assistant: the targets in three columns, idle, polling
 and live, the runner's log under them, an input line pinned to the bottom, and
-every command typed where the cursor is. Nothing switches screens.
+every command typed where the cursor is. Nothing switches screens. While targets
+wait, the header names the pool cadence and how many rows are queued for the next
+check, and each waiting row counts down to its own poll.
 
 ```text
-tokgo 0.2.2 · monitor                                   ● 1 recording · 3 targets · 00:12
+tokgo 0.3.0 · monitor           ● 1 recording · 3 targets · poll 15s · 1 waiting · 00:12
 ────────────────────────────────────────────────────────────────────────────────────────
 idle 1                        polling 1                     live 1
 idle   @donut_ntp.…           wait   @natgeo        -00:14  REC    @aljazeerae…    00:12
@@ -151,7 +165,7 @@ input shows what tab would fill.
 | `/drop <user>` | stop recording one target, the others keep going; the name stays saved |
 | `/once`, `/wait` | record one session per target, or keep waiting (default) |
 | `/duration <min>` | capture cap per session, `0` for none |
-| `/interval <min>` | minutes between liveness polls, minimum 1 |
+| `/interval <sec>` | seconds between liveness polls, minimum 1 |
 | `/output <dir>` | where recordings land |
 | `/proxy <url>` | proxy for lookups, alone clears it |
 | `/telegram on\|off` | upload each recording when it is written |
