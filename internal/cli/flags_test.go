@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/pflag"
+
 	"tokgo/internal/config"
 )
 
@@ -223,5 +225,24 @@ func TestParseWritesNothing(t *testing.T) {
 	}
 	if len(out) != 0 {
 		t.Errorf("Parse wrote to stdout/stderr: %q", out)
+	}
+}
+
+// TestCobraPathMapsTheLegacyInterval covers the entry point the executable uses:
+// cobra fills the same flags struct and calls parsed, so a rule that only lived
+// in Parse would quietly skip the real command line.
+func TestCobraPathMapsTheLegacyInterval(t *testing.T) {
+	fs := pflag.NewFlagSet("tokgo", pflag.ContinueOnError)
+	f := bind(fs)
+	args := normalize([]string{"-user", "x", "-automatic_interval", "2"}, fs)
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	p, err := f.parsed()
+	if err != nil {
+		t.Fatalf("parsed: %v", err)
+	}
+	if got := p.Config.PollInterval; got != 2*time.Minute {
+		t.Fatalf("poll interval = %v, want the legacy 2 minutes", got)
 	}
 }

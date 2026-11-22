@@ -27,6 +27,7 @@ var tikTokURL = regexp.MustCompile(`^.*www\.tiktok\.com.*$|^.*vm\.tiktok\.com.*$
 // flags collects the reference CLI's knobs. Every one is a single-dash long
 // name there, which normalize rewrites into the double-dash form pflag parses.
 type flags struct {
+	fs                                       *pflag.FlagSet
 	url, user, roomID, proxy, output, ffmpeg string
 	interval, poll, duration                 int
 	once, telegram, noUpdateCheck            bool
@@ -34,7 +35,7 @@ type flags struct {
 
 // bind registers the flags on fs and returns the struct that collects them.
 func bind(fs *pflag.FlagSet) *flags {
-	f := &flags{}
+	f := &flags{fs: fs}
 	fs.StringVar(&f.url, "url", "", "TikTok live room url")
 	fs.StringVarP(&f.user, "user", "u", "", "username, or a comma-separated list of usernames")
 	fs.StringVar(&f.roomID, "room_id", "", "TikTok room id")
@@ -81,6 +82,15 @@ func (f *flags) parsed() (Parsed, error) {
 		return Parsed{}, errors.New("-duration cannot be negative")
 	}
 
+	poll := time.Duration(f.poll) * time.Second
+	// The legacy flag keeps its meaning for scripts that pass it: a minute gap
+	// per poll, which becomes the pool tick. An explicit -poll_interval wins.
+	// Both the cobra command and the TUI's Parse go through here, so the rule
+	// holds whichever entry point set the flags.
+	if f.fs.Changed("automatic_interval") && !f.fs.Changed("poll_interval") {
+		poll = time.Duration(f.interval) * time.Minute
+	}
+
 	return Parsed{
 		Config: config.Config{
 			URL:               f.url,
@@ -88,7 +98,7 @@ func (f *flags) parsed() (Parsed, error) {
 			RoomID:            f.roomID,
 			Once:              f.once,
 			AutomaticInterval: f.interval,
-			PollInterval:      time.Duration(f.poll) * time.Second,
+			PollInterval:      poll,
 			Duration:          f.duration,
 			OutputDir:         f.output,
 			FFmpegPath:        f.ffmpeg,
@@ -110,16 +120,7 @@ func Parse(args []string) (Parsed, error) {
 	if err := fs.Parse(normalize(args, fs)); err != nil {
 		return Parsed{}, err
 	}
-	p, err := f.parsed()
-	if err != nil {
-		return Parsed{}, err
-	}
-	// The legacy flag keeps its meaning for scripts that pass it: a minute gap
-	// per poll, which becomes the pool tick. An explicit -poll_interval wins.
-	if fs.Changed("automatic_interval") && !fs.Changed("poll_interval") {
-		p.Config.PollInterval = time.Duration(f.interval) * time.Minute
-	}
-	return p, nil
+	return f.parsed()
 }
 
 // normalize rewrites the reference CLI's single-dash long flags (-user) into
